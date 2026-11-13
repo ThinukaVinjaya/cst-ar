@@ -8,6 +8,11 @@ st=Usd.Stage.CreateNew(out); UsdGeom.SetStageUpAxis(st,UsdGeom.Tokens.y); UsdGeo
 st.SetTimeCodesPerSecond(FPS); st.SetStartTimeCode(0); st.SetEndTimeCode(N-1)
 st.GetRootLayer().customLayerData={'autoPlay':True,'playbackMode':'loop'}   # Quick Look reads these
 world=UsdGeom.Xform.Define(st,'/World'); st.SetDefaultPrim(world.GetPrim())
+# Apple 'preliminary anchoring': Quick Look places the scene on the first horizontal surface by itself (no tap to place)
+from pxr import Sdf as _S
+world.GetPrim().SetMetadata('apiSchemas',_S.TokenListOp.CreateExplicit(['Preliminary_AnchoringAPI']))
+world.GetPrim().CreateAttribute('preliminary:anchoring:type',_S.ValueTypeNames.Token,custom=False).Set('plane')
+world.GetPrim().CreateAttribute('preliminary:planeAnchoring:alignment',_S.ValueTypeNames.Token,custom=False).Set('horizontal')
 ring=UsdGeom.Xform.Define(st,'/World/Ring'); rop=ring.AddRotateYOp()
 for f in range(N): rop.Set(-360.0*f/N, Usd.TimeCode(f))        # one full lap over the loop
 

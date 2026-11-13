@@ -52,7 +52,9 @@ const ok=navigator.xr && await navigator.xr.isSessionSupported('immersive-ar').c
 if(ok){ mv.removeAttribute('ar'); $('xr').style.display='block'; $('note').textContent='Tap the button and point at the loot box. The squad appears straight away.'; }
 const DIST=0.55, DROP=0.42;            // metres ahead of the phone, metres below the phone (typical table distance)
 let renderer,scene,camera,mixer,squad,session,hitSource,refSpace,gltf,placed,targetY,snapped;
+const preload=ok?new GLTFLoader().loadAsync('models/squad.glb').then(g=>gltf=g).catch(()=>{}):null;   // load while the student reads the page, so AR opens instantly
 $('xr').onclick=async()=>{
+  if(!gltf) await preload;
   if(!gltf) gltf=await new GLTFLoader().loadAsync('models/squad.glb');
   renderer=new THREE.WebGLRenderer({antialias:true,alpha:true}); renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
   Object.assign(renderer.domElement.style,{position:'fixed',inset:0,zIndex:0}); document.body.appendChild(renderer.domElement);
