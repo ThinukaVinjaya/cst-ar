@@ -11,39 +11,59 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif}
 body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-header{padding:16px 20px 4px}
-h1{margin:0;font-size:2.3rem;line-height:1}
-header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
+header{padding:14px 18px 4px}
+h1{margin:0;font-size:2.2rem;line-height:1}
+header p{margin:4px 0 0;color:var(--mute);font-size:1.05rem}
+#viewer-container{position:relative;flex:1;min-height:0;width:100%;display:flex}
 model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);--poster-color:transparent}
-#ar{position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer}
+#action-bar{display:flex;justify-content:center;gap:6px;padding:8px 12px;background:rgba(20,23,15,.9);border-top:1px solid #2d3521;z-index:2}
+.act-btn{background:#232a18;color:var(--ink);border:1px solid #3d4727;padding:8px 14px;font:inherit;font-size:1.05rem;font-weight:700;cursor:pointer;border-radius:4px;transition:all .15s ease}
+.act-btn:hover,.act-btn:active{background:#354024}
+.act-btn.active{background:var(--flare);color:#14170f;border-color:var(--flare)}
+#ar{position:absolute;left:18px;right:18px;bottom:14px;padding:18px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.6rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:3}
 #ar:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-#note{margin:0;padding:8px 20px;color:var(--mute);text-align:center;min-height:2.4em}
-#xr{display:none;position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer}
+#xr{display:none;position:absolute;left:18px;right:18px;bottom:14px;padding:18px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.6rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:3}
 #xr:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+#note{margin:0;padding:6px 16px;color:var(--mute);text-align:center;min-height:2.2em;font-size:0.95rem}
 #overlay{display:none;position:fixed;inset:0;pointer-events:none}
-#status{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:rgba(20,23,15,.8);color:var(--ink);padding:10px;font-size:1.2rem}
-#action-btn{position:absolute;top:calc(60px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);pointer-events:auto;padding:8px 20px;font:inherit;font-size:1.1rem;background:rgba(255,106,26,.9);color:#14170f;font-weight:700;border:0;cursor:pointer}
-#exit{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);pointer-events:auto;padding:12px 28px;font:inherit;font-size:1.2rem;background:rgba(20,23,15,.85);color:var(--ink);border:1px solid #3a4128}
+#overlay #ar-actions{position:absolute;top:calc(54px + env(safe-area-inset-top));left:12px;right:12px;display:flex;justify-content:center;gap:6px;pointer-events:auto;flex-wrap:wrap}
+#status{position:absolute;top:calc(12px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:rgba(20,23,15,.85);color:var(--ink);padding:8px 14px;font-size:1.15rem;border-radius:4px}
+#exit{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);pointer-events:auto;padding:12px 28px;font:inherit;font-size:1.15rem;background:rgba(20,23,15,.9);color:var(--ink);border:1px solid #3a4128;border-radius:4px}
 </style>
 </head>
 <body>
 <header>
   <h1>CST LAN Challenge</h1>
-  <p>Tap the button, point your camera at the table or loot box, and hold the phone steady.</p>
+  <p>Point at the table or loot box. Use the action buttons to trigger military moves.</p>
 </header>
-<model-viewer id="mv" src="models/ghost_animated.glb" ios-src="models/ghost_animated.usdz" alt="Ghost military operator" autoplay animation-name="Idle"
-  camera-controls camera-orbit="0deg 75deg 2m" shadow-intensity="1" interaction-prompt="none"
-  ar ar-modes="scene-viewer webxr quick-look" ar-placement="floor" ar-scale="fixed" loading="eager"
-  scale="0.131 0.131 0.131">
-  <button slot="ar-button" id="ar">Open AR camera</button>
-</model-viewer>
-<button id="xr">Open AR camera</button>
+<div id="viewer-container">
+  <model-viewer id="mv" src="models/ghost_animated.glb" ios-src="models/ghost_animated.usdz" alt="Ghost military operator" autoplay animation-name="Idle"
+    camera-controls camera-orbit="0deg 75deg 2m" shadow-intensity="1" interaction-prompt="none"
+    ar ar-modes="scene-viewer webxr quick-look" ar-placement="floor" ar-scale="fixed" loading="eager"
+    scale="0.131 0.131 0.131">
+    <button slot="ar-button" id="ar">Open AR camera</button>
+  </model-viewer>
+  <button id="xr">Open AR camera</button>
+</div>
+<div id="action-bar">
+  <button class="act-btn active" data-act="Idle">Idle</button>
+  <button class="act-btn" data-act="Aim">Aim</button>
+  <button class="act-btn" data-act="Fire">Fire</button>
+  <button class="act-btn" data-act="Reload">Reload</button>
+  <button class="act-btn" data-act="Scan">Scan</button>
+</div>
 <div id="overlay">
   <div id="status"></div>
-  <button id="action-btn">Action: Idle</button>
+  <div id="ar-actions">
+    <button class="act-btn active" data-act="Idle">Idle</button>
+    <button class="act-btn" data-act="Aim">Aim</button>
+    <button class="act-btn" data-act="Fire">Fire</button>
+    <button class="act-btn" data-act="Reload">Reload</button>
+    <button class="act-btn" data-act="Scan">Scan</button>
+  </div>
   <button id="exit">Close</button>
 </div>
-<p id="note">Allow camera access. Ghost appears on the table. No touching needed.</p>
+<p id="note">Ghost appears on the table. No touching needed.</p>
 <script>
 const mv=document.getElementById('mv');
 mv.addEventListener('load',()=>{ if(!mv.canActivateAR) document.getElementById('note').textContent='AR is not supported on this phone or browser. On iPhone use Safari; on Android use Chrome.'; });
@@ -52,34 +72,55 @@ mv.addEventListener('load',()=>{ if(!mv.canActivateAR) document.getElementById('
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 const $=id=>document.getElementById(id), mv=$('mv');
-/* Android Chrome (WebXR): Ghost appears INSTANTLY in front of the camera on the table, animated with tactical military idle actions.
-   Auto-snaps height when the surface is found. iPhone: falls back to Apple AR Quick Look (USDZ). */
+
 const ok=navigator.xr && await Promise.race([navigator.xr.isSessionSupported('immersive-ar').catch(()=>false), new Promise(r=>setTimeout(()=>r(false),2000))]);
 if(ok){ mv.removeAttribute('ar'); $('xr').style.display='block'; $('xr').disabled=true; $('xr').textContent='Loading Ghost…'; $('note').textContent='Tap the button and point at the table. Ghost appears straight away.'; }
 
 const TARGET_HEIGHT=0.25;               // Tabletop height in metres (0.25 = 25 cm; set to 1.8 for life-size)
 const DIST=0.60, DROP=0.38;             // metres ahead of the phone, metres below the phone
-let renderer,scene,camera,mixer,ghost,session,hitSource,refSpace,gltf,placed,targetY,snapped,currentAction='Idle';
+let renderer,scene,camera,mixer,ghost,session,hitSource,refSpace,gltf,placed,targetY,snapped,currentActionClip=null,currentActionName='Idle';
 
-const preload=ok?new GLTFLoader().loadAsync('models/ghost_animated.glb').then(g=>{gltf=g; $('xr').disabled=false; $('xr').textContent='Open AR camera';}).catch(()=>{ $('xr').disabled=false; $('xr').textContent='Open AR camera'; }):null;
+// High-speed preload directly upon page start
+const preload=ok?new GLTFLoader().loadAsync('models/ghost_animated.glb').then(g=>{
+  gltf=g; $('xr').disabled=false; $('xr').textContent='Open AR camera';
+}).catch(()=>{ $('xr').disabled=false; $('xr').textContent='Open AR camera'; }):null;
 
-$('action-btn').onclick=()=>{
-  if(!mixer||!gltf) return;
-  const nextAction=currentAction==='Idle'?'Scan':'Idle';
-  const clip=gltf.animations.find(a=>a.name===nextAction);
-  if(clip){
-    mixer.stopAllAction();
-    mixer.clipAction(clip).play();
-    currentAction=nextAction;
-    $('action-btn').textContent=`Action: ${currentAction}`;
+function setAction(name){
+  currentActionName=name;
+  document.querySelectorAll('.act-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.act===name);
+  });
+  // Update model-viewer if not in WebXR
+  if(mv && mv.availableAnimations && mv.availableAnimations.includes(name)){
+    mv.animationName=name;
+    mv.play();
   }
-};
+  // Update WebXR mixer if in active AR session
+  if(mixer && gltf){
+    const newClip=gltf.animations.find(a=>a.name===name);
+    if(newClip){
+      const newAction=mixer.clipAction(newClip);
+      if(currentActionClip && currentActionClip!==newAction){
+        newAction.reset();
+        newAction.crossFadeFrom(currentActionClip, 0.2, true);
+        newAction.play();
+      } else {
+        newAction.play();
+      }
+      currentActionClip=newAction;
+    }
+  }
+}
+
+document.querySelectorAll('.act-btn').forEach(btn=>{
+  btn.onclick=()=>setAction(btn.dataset.act);
+});
 
 $('xr').onclick=async()=>{
   if(!gltf) await preload;
   if(!gltf) gltf=await new GLTFLoader().loadAsync('models/ghost_animated.glb');
   renderer=new THREE.WebGLRenderer({antialias:false,alpha:true,powerPreference:'high-performance'});
-  renderer.setPixelRatio(1); renderer.xr.setFramebufferScaleFactor(0.8);
+  renderer.setPixelRatio(1); renderer.xr.setFramebufferScaleFactor(0.85);
   renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
   Object.assign(renderer.domElement.style,{position:'fixed',inset:0,zIndex:0});
   document.body.appendChild(renderer.domElement);
@@ -96,10 +137,10 @@ $('xr').onclick=async()=>{
   if(TARGET_HEIGHT&&rawH>0){ const s=TARGET_HEIGHT/rawH; ghost.scale.set(s,s,s); }
   scene.add(ghost);
 
-  // Play character military action animation (Idle by default)
+  // Animation mixer with active action
   mixer=new THREE.AnimationMixer(ghost);
-  const idleClip=gltf.animations.find(a=>a.name==='Idle')||gltf.animations[0];
-  if(idleClip) mixer.clipAction(idleClip).play();
+  const initClip=gltf.animations.find(a=>a.name===currentActionName)||gltf.animations[0];
+  if(initClip){ currentActionClip=mixer.clipAction(initClip); currentActionClip.play(); }
 
   placed=false; snapped=false; hitSource=null;
   const ov=$('overlay'); ov.style.display='block'; $('status').style.display='block'; $('status').textContent='Point at the table';
@@ -116,7 +157,7 @@ $('xr').onclick=async()=>{
   const clock=new THREE.Clock(), q=new THREE.Quaternion(), f=new THREE.Vector3(), v=new THREE.Vector3();
   renderer.setAnimationLoop((t,frame)=>{
     const dt=Math.min(clock.getDelta(),0.1);
-    if(mixer) mixer.update(dt); // Updates character breathing, weapon sway, and head scanning
+    if(mixer) mixer.update(dt);
 
     if(frame){
       if(!placed){

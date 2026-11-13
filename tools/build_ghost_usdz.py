@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Converts models/ghost_animated.glb to models/ghost_animated.usdz for iOS Apple AR Quick Look.
+Converts the optimized models/ghost_animated.glb to models/ghost_animated.usdz for iOS Apple AR Quick Look.
 Includes:
 - Tabletop auto-scaling (height ~0.25m)
 - Preliminary horizontal plane anchoring (auto-places on table without tapping)
 - Full materials and diffuse textures
-- Idle military character animation (5-second breathing, weapon sway, and head scan)
+- Dynamic military character animation with weapon sway, arm movements, and breathing
 """
 import struct, json, os, zipfile, math
 
-def build_usdz(glb_path, out_usdz_path, target_height=0.25):
+def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
     with open(glb_path, 'rb') as f:
         magic, version, length = struct.unpack('<4sII', f.read(12))
         chunk0_len, _ = struct.unpack('<II', f.read(8))
@@ -75,10 +75,34 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
                 out_f.write(img_bytes)
             tex_files[i] = fname
 
-    # Map materials
-    materials = gltf.get('materials', [])
-    textures = gltf.get('textures', [])
+    # Select animation
+    selected_anim = next((a for a in gltf['animations'] if a['name'] == anim_name), gltf['animations'][0])
+    anim_data = {}
+    max_frame = 0
 
+    for ch in selected_anim['channels']:
+        target = ch['target']
+        node_idx = target['node']
+        prop = target['path']
+        sampler = selected_anim['samplers'][ch['sampler']]
+        times = read_accessor(sampler['input'])
+        values = read_accessor(sampler['output'])
+
+        if node_idx not in anim_data:
+            anim_data[node_idx] = {}
+
+        samples = []
+        for t, v in zip(times, values):
+            frame = round(t * 30)
+            max_frame = max(max_frame, frame)
+            if prop == 'rotation':
+                # glTF (x, y, z, w) -> USD quatf (w, x, y, z)
+                samples.append((frame, (v[3], v[0], v[1], v[2])))
+            elif prop == 'translation':
+                samples.append((frame, (v[0], v[1], v[2])))
+        anim_data[node_idx][prop] = samples
+
+    # Build USDA
     usda_lines = []
     usda_lines.append('#usda 1.0')
     usda_lines.append('(')
@@ -86,7 +110,7 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     usda_lines.append('    metersPerUnit = 1.0')
     usda_lines.append('    upAxis = "Y"')
     usda_lines.append('    startTimeCode = 0')
-    usda_lines.append('    endTimeCode = 150')
+    usda_lines.append(f'    endTimeCode = {max_frame}')
     usda_lines.append('    timeCodesPerSecond = 30')
     usda_lines.append('    customLayerData = {')
     usda_lines.append('        bool autoPlay = 1')
@@ -104,7 +128,9 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     usda_lines.append('    def Scope "Materials"')
     usda_lines.append('    {')
 
-    # Build materials
+    materials = gltf.get('materials', [])
+    textures = gltf.get('textures', [])
+
     for mat_idx, mat in enumerate(materials):
         pbr = mat.get('pbrMetallicRoughness', {})
         base_color = pbr.get('baseColorFactor', [1.0, 1.0, 1.0, 1.0])
@@ -154,31 +180,6 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     usda_lines.append('    }')
     usda_lines.append('')
 
-    # Animation samples for Idle
-    idle_anim = next((a for a in gltf['animations'] if a['name'] == 'Idle'), gltf['animations'][0])
-    anim_data = {} # node_idx -> {'rotation': [(frame, (w,x,y,z))], 'translation': [(frame, (x,y,z))]}
-
-    for ch in idle_anim['channels']:
-        target = ch['target']
-        node_idx = target['node']
-        prop = target['path']
-        sampler = idle_anim['samplers'][ch['sampler']]
-        times = read_accessor(sampler['input'])
-        values = read_accessor(sampler['output'])
-
-        if node_idx not in anim_data:
-            anim_data[node_idx] = {}
-
-        samples = []
-        for t, v in zip(times, values):
-            frame = round(t * 30)
-            if prop == 'rotation':
-                # glTF is (x, y, z, w); USD quatf is (w, x, y, z)
-                samples.append((frame, (v[3], v[0], v[1], v[2])))
-            elif prop == 'translation':
-                samples.append((frame, (v[0], v[1], v[2])))
-        anim_data[node_idx][prop] = samples
-
     # Root Model Xform
     usda_lines.append('    def Xform "Ghost"')
     usda_lines.append('    {')
@@ -186,7 +187,6 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     usda_lines.append('        uniform token[] xformOpOrder = ["xformOp:scale"]')
     usda_lines.append('')
 
-    # Build node hierarchy recursively
     nodes = gltf['nodes']
     scene_root_nodes = gltf['scenes'][0]['nodes']
 
@@ -204,7 +204,7 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
 
         xform_ops = []
         t = n.get('translation')
-        r = n.get('rotation') # gltf (x, y, z, w)
+        r = n.get('rotation')
 
         n_anim = anim_data.get(n_idx, {})
 
@@ -231,7 +231,6 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
         if xform_ops:
             usda_lines.append(f'{ind}    uniform token[] xformOpOrder = [{", ".join(xform_ops)}]')
 
-        # Mesh primitive attached to node
         mesh_idx = n.get('mesh')
         if mesh_idx is not None:
             mesh = gltf['meshes'][mesh_idx]
@@ -248,26 +247,21 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
             usda_lines.append(f'{ind}        rel material:binding = </World/Materials/Material_{mat_idx}>')
             usda_lines.append(f'{ind}        uniform token subdivisionScheme = "none"')
 
-            # Points
             pts_str = ", ".join(f"({p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f})" for p in pos_list)
             usda_lines.append(f'{ind}        point3f[] points = [{pts_str}]')
 
-            # FaceVertexCounts (all triangles)
             num_faces = len(idx_list) // 3
             usda_lines.append(f'{ind}        int[] faceVertexCounts = [{", ".join(["3"]*num_faces)}]')
 
-            # FaceVertexIndices
             idx_str = ", ".join(str(i) for i in idx_list)
             usda_lines.append(f'{ind}        int[] faceVertexIndices = [{idx_str}]')
 
-            # Normals
             if nrm_list:
                 nrm_str = ", ".join(f"({n[0]:.4f}, {n[1]:.4f}, {n[2]:.4f})" for n in nrm_list)
                 usda_lines.append(f'{ind}        normal3f[] normals = [{nrm_str}] (')
                 usda_lines.append(f'{ind}            interpolation = "vertex"')
                 usda_lines.append(f'{ind}        )')
 
-            # Primvar st (UV)
             if uv_list:
                 uv_str = ", ".join(f"({u[0]:.4f}, {1.0 - u[1]:.4f})" for u in uv_list)
                 usda_lines.append(f'{ind}        texCoord2f[] primvars:st = [{uv_str}] (')
@@ -276,7 +270,6 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
 
             usda_lines.append(f'{ind}    }}')
 
-        # Recurse children
         for child_idx in n.get('children', []):
             write_node(child_idx, indent_level + 1)
 
@@ -285,16 +278,13 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     for r_idx in scene_root_nodes:
         write_node(r_idx, 2)
 
-    usda_lines.append('    }') # End Ghost
-    usda_lines.append('}') # End World
+    usda_lines.append('    }')
+    usda_lines.append('}')
 
-    # Write USDA
     usda_file = 'scratch/ghost_usdz_build/ghost.usda'
     with open(usda_file, 'w', encoding='utf-8') as out_f:
         out_f.write("\n".join(usda_lines))
-    print(f"Wrote USDA file: {usda_file} ({os.path.getsize(usda_file)/1024/1024:.2f} MB)")
 
-    # Package as uncompressed ZIP (USDZ)
     with zipfile.ZipFile(out_usdz_path, 'w', compression=zipfile.ZIP_STORED) as zf:
         zf.write(usda_file, 'ghost.usda')
         for fname in os.listdir(textures_dir):
@@ -303,5 +293,4 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     print(f"Successfully generated USDZ: {out_usdz_path} ({os.path.getsize(out_usdz_path)/1024/1024:.2f} MB)")
 
 if __name__ == '__main__':
-    build_usdz('models/ghost_animated.glb', 'models/ghost_animated.usdz', target_height=0.25)
-
+    build_usdz('models/ghost_animated.glb', 'models/ghost_animated.usdz', target_height=0.25, anim_name='Idle')
