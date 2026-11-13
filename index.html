@@ -3,50 +3,117 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>CST LAN Challenge – AR Drop</title>
+<title>CST LAN Challenge – AR Squad</title>
 <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style>
 :root{--bg:#14170f;--panel:#1f2417;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a;--line:#3a4128}
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-header{padding:16px 18px 8px}
-h1{margin:0;font-size:2rem;line-height:1;letter-spacing:.02em;font-weight:700}
-header p{margin:6px 0 0;color:var(--mute);font-size:1.05rem}
-nav{display:flex;gap:8px;padding:8px 18px}
-nav button{flex:1;padding:10px 6px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font:inherit;font-size:1.15rem;cursor:pointer}
-nav button[aria-selected="true"]{background:var(--flare);color:#14170f;border-color:var(--flare);font-weight:700}
-nav button:disabled{opacity:.35;cursor:not-allowed}
-nav button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
-main{flex:1;min-height:0;padding:0 18px 12px;display:flex;flex-direction:column}
-model-viewer{flex:1;width:100%;min-height:320px;background:radial-gradient(circle at 50% 40%,#2c3320,#14170f 75%);--poster-color:transparent}
-#ar-btn{position:absolute;inset:auto 16px 16px 16px;background:var(--flare);color:#14170f;border:0;padding:22px 26px;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer}
-#hint{margin:10px 0 0;color:var(--mute);font-size:1rem;text-align:center}
-@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#home{height:100%;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:22px}
+h1{margin:0;font-size:2.4rem;line-height:1}
+p{margin:0;color:var(--mute);font-size:1.1rem}
+.mode{display:block;width:100%;text-align:left;padding:18px;background:var(--panel);border:2px solid var(--line);color:var(--ink);font:inherit;cursor:pointer}
+.mode b{display:block;font-size:1.6rem}.mode span{color:var(--mute);font-size:1.05rem}
+.mode:first-of-type{border-color:var(--flare)}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+#live{position:fixed;inset:0;display:none;background:#000}
+#live video,#live canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#bar{position:absolute;left:0;right:0;bottom:0;display:flex;gap:8px;padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:rgba(20,23,15,.78)}
+#bar button{flex:1;padding:14px 6px;font:inherit;font-size:1.25rem;background:var(--panel);color:var(--ink);border:1px solid var(--line);cursor:pointer}
+#bar button.on{background:var(--flare);color:#14170f;font-weight:700;border-color:var(--flare)}
+#msg{position:absolute;top:calc(12px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:rgba(20,23,15,.78);padding:8px;font-size:1.05rem}
+model-viewer{position:fixed;left:-9999px;top:0;width:300px;height:300px}
 </style>
 </head>
 <body>
-<header>
+<section id="home">
   <h1>CST LAN Challenge</h1>
-  
-</header>
-<main>
-  <model-viewer id="mv" src="models/squad.glb" alt="Soldiers standing in a ring around the loot box" camera-controls auto-rotate shadow-intensity="1" shadow-softness="0.8"
-    ar ar-modes="webxr scene-viewer quick-look" ar-placement="floor" ar-scale="fixed"
-    interaction-prompt="none" touch-action="pan-y" loading="eager">
-    <button slot="ar-button" id="ar-btn">Tap to open camera</button>
-  </model-viewer>
-  <p id="hint">Allow camera access. Move the phone slowly over the table, tap to place, then drag to line the circle up with the box. Pinch to resize.</p>
-</main>
+  <p>Choose how to see the squad around the loot box.</p>
+  <button class="mode" id="m-live"><b>Instant view</b><span>Opens the camera at once. No table scanning. Soldiers appear in front of you and stay put as you turn.</span></button>
+  <button class="mode" id="m-ar"><b>Table AR</b><span>Uses your phone’s built-in AR to lock the squad onto the table surface.</span></button>
+  <p id="note"></p>
+</section>
+
+<section id="live" aria-label="Instant AR view">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="gl"></canvas>
+  <div id="msg">Point at the loot box. Drag to turn the squad, pinch to resize.</div>
+  <div id="bar">
+    <button id="a-Patrol" class="on">Patrol</button>
+    <button id="a-Guard">Guard</button>
+    <button id="close">Close</button>
+  </div>
+</section>
+
+<model-viewer id="mv" src="models/squad.glb" alt="Animated soldiers around a loot box" autoplay animation-name="Patrol"
+  ar ar-modes="scene-viewer webxr quick-look" ar-placement="floor" ar-scale="fixed" loading="eager"></model-viewer>
 
 <script>
-/* Try to open AR straight away. Browsers usually block this until the first tap,
-   so we also start AR on the first touch anywhere on the page. */
-const mv=document.getElementById('mv');
-let started=false;
-function start(){ if(started) return; started=true; try{ mv.activateAR(); }catch(e){ started=false; } }
-mv.addEventListener('load',()=>{ setTimeout(start,300); });
-document.addEventListener('pointerup',start,{once:false});
+const mv=document.getElementById('mv'), note=document.getElementById('note');
+document.getElementById('m-ar').onclick=()=>{
+  if(!mv.canActivateAR){ note.textContent='Table AR is not supported on this phone or browser. Use Instant view.'; return; }
+  mv.activateAR();
+};
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+const $=id=>document.getElementById(id);
+let started=false, renderer, scene, camera, mixer, actions={}, squad, stream, raf, yawOffset=null, devQ=null, userYaw=0, scale=1;
+
+async function start(){
+  if(started) return; started=true;
+  $('home').style.display='none'; $('live').style.display='block';
+  try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+       $('cam').srcObject=stream; await $('cam').play(); }
+  catch(e){ $('msg').textContent='Camera blocked. Allow camera access in browser settings, then reload.'; }
+  if(window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission){   // iOS asks permission
+    try{ await DeviceOrientationEvent.requestPermission(); }catch(e){} }
+  window.addEventListener('deviceorientation',onOri);
+
+  renderer=new THREE.WebGLRenderer({canvas:$('gl'),alpha:true,antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setClearColor(0,0);
+  scene=new THREE.Scene(); camera=new THREE.PerspectiveCamera(60,1,0.01,20);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x555544,2.2));
+  const sun=new THREE.DirectionalLight(0xffffff,2); sun.position.set(1,2,1); scene.add(sun);
+  const gltf=await new GLTFLoader().loadAsync('models/squad.glb');
+  squad=gltf.scene; squad.position.set(0,-0.28,-0.55);   // ~55 cm ahead, slightly below eye level = tabletop
+  scene.add(squad);
+  mixer=new THREE.AnimationMixer(squad);
+  gltf.animations.forEach(c=>actions[c.name]=mixer.clipAction(c));
+  play('Patrol'); resize(); addEventListener('resize',resize);
+  const clock=new THREE.Clock();
+  (function loop(){ raf=requestAnimationFrame(loop); mixer.update(clock.getDelta());
+    if(devQ){ camera.quaternion.copy(yawOffset).multiply(devQ); }
+    squad.rotation.y=userYaw; squad.scale.setScalar(scale); renderer.render(scene,camera); })();
+  setTimeout(()=>$('msg').style.display='none',6000);
+}
+function play(n){ Object.values(actions).forEach(a=>a.stop()); actions[n].reset().play();
+  ['Patrol','Guard'].forEach(k=>$('a-'+k).classList.toggle('on',k===n)); }
+function resize(){ renderer.setSize(innerWidth,innerHeight,false); camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); }
+
+const z=new THREE.Vector3(0,0,1), q1=new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5)), e=new THREE.Euler(), q=new THREE.Quaternion();
+function onOri(ev){
+  if(ev.alpha==null) return;
+  const D=Math.PI/180, orient=(screen.orientation?screen.orientation.angle:0)*D;
+  e.set(ev.beta*D, ev.alpha*D, -ev.gamma*D,'YXZ'); q.setFromEuler(e); q.multiply(q1); q.multiply(new THREE.Quaternion().setFromAxisAngle(z,-orient));
+  devQ=q.clone();
+  if(!yawOffset){ const yaw=new THREE.Euler().setFromQuaternion(devQ,'YXZ').y; yawOffset=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),-yaw); }
+}
+// drag = turn squad, pinch = resize
+const pts=new Map(); let lastD=0;
+$('live').addEventListener('pointerdown',e=>{ if(e.target.closest('#bar')) return; pts.set(e.pointerId,e); });
+$('live').addEventListener('pointermove',e=>{ if(!pts.has(e.pointerId)) return;
+  const p=pts.get(e.pointerId); pts.set(e.pointerId,e);
+  if(pts.size===1) userYaw+=(e.clientX-p.clientX)*0.01;
+  else if(pts.size===2){ const [a,b]=[...pts.values()]; const d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY); if(lastD) scale=Math.min(3,Math.max(.3,scale*d/lastD)); lastD=d; } });
+['pointerup','pointercancel'].forEach(t=>$('live').addEventListener(t,e=>{pts.delete(e.pointerId); lastD=0;}));
+$('a-Patrol').onclick=()=>play('Patrol'); $('a-Guard').onclick=()=>play('Guard');
+$('close').onclick=()=>location.reload();
+$('m-live').onclick=start;
 </script>
 </body>
 </html>
