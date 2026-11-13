@@ -48,32 +48,33 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 const $=id=>document.getElementById(id), mv=$('mv');
 /* Android Chrome (WebXR): the squad appears INSTANTLY in front of the camera on the table, animated, no scanning and no touch.
    If the phone finds the table surface it quietly snaps the squad's height to it. iPhone: falls back to the built-in viewer. */
-const ok=navigator.xr && await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false);
-if(ok){ mv.removeAttribute('ar'); $('xr').style.display='block'; $('note').textContent='Tap the button and point at the loot box. The squad appears straight away.'; }
+const ok=navigator.xr && await Promise.race([navigator.xr.isSessionSupported('immersive-ar').catch(()=>false), new Promise(r=>setTimeout(()=>r(false),2000))]);
+if(ok){ mv.removeAttribute('ar'); $('xr').style.display='block'; $('xr').disabled=true; $('xr').textContent='Loading squad…'; $('note').textContent='Tap the button and point at the loot box. The squad appears straight away.'; }
 const DIST=0.55, DROP=0.42;            // metres ahead of the phone, metres below the phone (typical table distance)
 let renderer,scene,camera,mixer,squad,session,hitSource,refSpace,gltf,placed,targetY,snapped;
-const preload=ok?new GLTFLoader().loadAsync('models/squad.glb').then(g=>gltf=g).catch(()=>{}):null;   // load while the student reads the page, so AR opens instantly
+const preload=ok?new GLTFLoader().loadAsync('models/squad_lite.glb').then(g=>{gltf=g; $('xr').disabled=false; $('xr').textContent='Open AR camera';}).catch(()=>{ $('xr').disabled=false; $('xr').textContent='Open AR camera'; }):null;   // load while the student reads the page, so AR opens instantly
 $('xr').onclick=async()=>{
   if(!gltf) await preload;
-  if(!gltf) gltf=await new GLTFLoader().loadAsync('models/squad.glb');
-  renderer=new THREE.WebGLRenderer({antialias:true,alpha:true}); renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
+  if(!gltf) gltf=await new GLTFLoader().loadAsync('models/squad_lite.glb');
+  renderer=new THREE.WebGLRenderer({antialias:false,alpha:true,powerPreference:'high-performance'}); renderer.setPixelRatio(1); renderer.xr.setFramebufferScaleFactor(0.8); renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
   Object.assign(renderer.domElement.style,{position:'fixed',inset:0,zIndex:0}); document.body.appendChild(renderer.domElement);
   scene=new THREE.Scene(); camera=new THREE.PerspectiveCamera();
   scene.add(new THREE.HemisphereLight(0xffffff,0x666655,2.4)); const d=new THREE.DirectionalLight(0xffffff,2); d.position.set(1,3,1); scene.add(d);
   squad=gltf.scene; squad.visible=false; squad.traverse(o=>o.frustumCulled=false); scene.add(squad);
-  mixer=new THREE.AnimationMixer(squad); mixer.clipAction(gltf.animations.find(a=>a.name==='Patrol')||gltf.animations[0]).play();
+  const patrol=gltf.animations.find(a=>a.name==='Patrol')||gltf.animations[0]; mixer=new THREE.AnimationMixer(squad); mixer.clipAction(patrol).play();
+  const ringNode=squad.getObjectByName('ring'), LAP=10*patrol.duration;   // ring is turned here (one walk cycle in the file keeps it small)
   placed=false; snapped=false; hitSource=null;
   const ov=$('overlay'); ov.style.display='block'; $('status').style.display='block'; $('status').textContent='Point at the loot box';
   try{ session=await navigator.xr.requestSession('immersive-ar',{optionalFeatures:['hit-test','dom-overlay'],domOverlay:{root:ov}}); }
   catch(e){ ov.style.display='none'; renderer.domElement.remove(); $('note').textContent='Could not start AR. Allow camera access and try again.'; return; }
   renderer.xr.setReferenceSpaceType('local'); await renderer.xr.setSession(session);
   refSpace=renderer.xr.getReferenceSpace();
-  try{ hitSource=await session.requestHitTestSource({space:await session.requestReferenceSpace('viewer')}); }catch(e){ hitSource=null; }
+  session.requestReferenceSpace('viewer').then(sp=>session.requestHitTestSource({space:sp})).then(hs=>hitSource=hs).catch(()=>{ hitSource=null; });   // optional, never blocks the start
   $('exit').onclick=()=>session.end();
   session.addEventListener('end',()=>{ renderer.setAnimationLoop(null); ov.style.display='none'; renderer.domElement.remove(); renderer.dispose(); });
   const clock=new THREE.Clock(), q=new THREE.Quaternion(), f=new THREE.Vector3(), v=new THREE.Vector3();
   renderer.setAnimationLoop((t,frame)=>{
-    const dt=clock.getDelta(); mixer.update(dt);
+    const dt=Math.min(clock.getDelta(),0.1); mixer.update(dt); if(ringNode) ringNode.rotation.y-=dt*2*Math.PI/LAP;
     if(frame){
       if(!placed){ const vp=frame.getViewerPose(refSpace);
         if(vp){ const p=vp.transform.position, o=vp.transform.orientation; q.set(o.x,o.y,o.z,o.w);

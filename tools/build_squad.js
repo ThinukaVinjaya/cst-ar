@@ -1,6 +1,7 @@
 // node build_squad.js  ->  ../models/squad.glb   (npm i @gltf-transform/core @gltf-transform/functions)
 const {NodeIO}=require('@gltf-transform/core'); const {getBounds,prune}=require('@gltf-transform/functions');
-const RING_RADIUS=0.20, HEIGHT=0.15, COUNT=6, PATROL_SECONDS_PER_LAP=24;   // metres / count
+const RING_RADIUS=0.20, HEIGHT=0.15, COUNT=6, PATROL_SECONDS_PER_LAP=10;   // 10 s per lap = natural walking pace at this size
+const LITE=process.env.LITE==='1';   // LITE=1 -> models/squad_lite.glb: one walk cycle, ring turned by code (small + fast for Android WebXR)   // metres / count
 (async()=>{
 const io=new NodeIO(); const doc=await io.read('Soldier.glb'); const root=doc.getRoot(); const scene=root.listScenes()[0];
 const src=scene.listChildren()[0]; const b=getBounds(scene); const S=HEIGHT/(b.max[1]-b.min[1]);
@@ -65,11 +66,11 @@ function build(name,srcName,cycles,patrol){
     const face=patrol?a-Math.PI/2:a; chan(anim,wrap,'rotation',[0,T],[q(face),q(face)],'VEC4');
   });
   const laps=4, times=[], vals=[]; for(let k=0;k<=laps;k++){times.push(T*k/laps); vals.push(q(patrol?-2*Math.PI*k/laps:0));}
-  chan(anim,ring,'rotation',times,vals,'VEC4'); return anim;
+  if(!LITE) chan(anim,ring,'rotation',times,vals,'VEC4'); return anim;
 }
 const walkD=srcAnims.Walk.listChannels()[0].getSampler().getInput().getArray().slice(-1)[0];
-build('Patrol','Walk',Math.round(PATROL_SECONDS_PER_LAP/walkD),true);
-build('Guard','Idle',4,false);
+build('Patrol','Walk',LITE?1:Math.round(PATROL_SECONDS_PER_LAP/walkD),true);
+if(!LITE) build('Guard','Idle',4,false);
 root.listAnimations().forEach(a=>{if(!['Patrol','Guard'].includes(a.getName()))a.dispose();});
 // drop the original un-posed character
 
@@ -77,5 +78,5 @@ const nq=(r,i)=>{const l=Math.hypot(r[i],r[i+1],r[i+2],r[i+3]); for(let j=0;j<4;
 root.listNodes().forEach(n=>{const r=[...n.getRotation()]; nq(r,0); n.setRotation(r);});
 const nd=new Set(); root.listAnimations().forEach(an=>an.listChannels().forEach(ch=>{ if(ch.getTargetPath()!=='rotation')return; const o=ch.getSampler().getOutput(); if(nd.has(o))return; nd.add(o); const r=o.getArray().slice(); for(let i=0;i<r.length;i+=4)nq(r,i); o.setArray(r);}));
 src.dispose(); await doc.transform(prune());
-await io.write('../models/squad.glb',doc); const fb=getBounds(scene); console.log('final bounds min',fb.min.map(v=>+v.toFixed(3)),'max',fb.max.map(v=>+v.toFixed(3))); console.log('ok, scale',S.toFixed(4));
+await io.write(LITE?'../models/squad_lite.glb':'../models/squad.glb',doc); const fb=getBounds(scene); console.log('final bounds min',fb.min.map(v=>+v.toFixed(3)),'max',fb.max.map(v=>+v.toFixed(3))); console.log('ok, scale',S.toFixed(4));
 })();
