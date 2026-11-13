@@ -1,35 +1,31 @@
-CST LAN Challenge - Animated AR Ghost Operator (Android & iOS)
+CST LAN Challenge - Call of Duty 4 Military AR Diorama (Android & iOS)
 
 Overview:
-- Single animated military operator ("Ghost") performing an automatic continuous military action loop:
-  1. Tactical Combat Idle & breathing (0.0s - 2.0s)
-  2. Weapon Raise & Target Lock (2.0s - 3.5s)
-  3. 3-Round Burst Fire with weapon recoil kickback & muzzle climb (3.5s - 5.0s)
-  4. Perimeter Sector Sweep checking for threats (5.0s - 7.0s)
-  5. Tactical Recovery back to ready stance (7.0s - 8.5s)
-- Plays automatically without needing any buttons or manual selections.
+- Designed to augment a real-world physical table decoration item (centerpiece / loot box / trophy) placed on the table.
+- The center (radius ~20 cm on the real table) is kept completely clear for the real physical item.
+- Ghost and authentic Call of Duty 4 military items form a tactical fortified perimeter encircling the centerpiece:
+  1. Ghost (Simon Riley): Stands at the perimeter, performing an automatic continuous 8.5s combat loop (idle breathing, raising rifle, 3-round burst fire with recoil, perimeter scan).
+  2. M18A1 Claymore Mine: With scissor wire tripod legs and "FRONT TOWARD ENEMY" stenciling guarding the front approach.
+  3. 7.62mm NATO Ammo Crates & Cans: Heavy military crates and ammo cans with metal latches and military stenciling.
+  4. CoD4 Intel Tactical Laptop: Open military Toughbook terminal resting on an equipment case with a glowing green UAV radar display.
+  5. Curved Sandbag Fortification: Multi-tier burlap sandbag barricade securing the right flank.
+  6. C4 Demolition Charge: Explosive block with black tape, wires, and digital receiver with red active LED.
+  7. Tactical Supply Drop Crate: Reinforced military equipment container on the left flank.
 
-iOS AR Quick Look Compatibility:
-- models/ghost_animated.usdz is strictly 64-byte aligned with the official 0x1986 USDZ padding tag. This resolves the Apple AR Quick Look "Object could not be opened" error.
-
-Android WebXR Compatibility:
-- models/ghost_animated.glb is optimized down to ~8.0 MB with clean geometry and PBR materials.
-- Instant camera-front placement with automatic tabletop height snapping.
+Platform Compatibility:
+- Android (Chrome + ARCore): Custom WebXR AR with instant camera-front placement and automatic table surface height snapping.
+- iPhone (Safari + ARKit): Fully 64-byte aligned Apple USDZ with preliminary horizontal plane anchoring (auto-places on the table with zero tapping).
 
 Files:
-- index.html                   : WebAR frontend with WebXR, Three.js, <model-viewer>.
-- models/ghost_animated.glb    : Optimized 3D model with automatic "Action" loop.
+- index.html                   : WebAR frontend with WebXR, Three.js, and <model-viewer>.
+- models/ghost_animated.glb    : Complete 3D diorama with Ghost's combat loop and military perimeter props.
 - models/ghost_animated.usdz   : Strictly 64-byte aligned Apple USDZ package for iPhone.
-- tools/optimize_and_animate.py: Builds the optimized GLB and Action animation.
-- tools/build_ghost_usdz.py    : Builds the 64-byte aligned USDZ package for iOS.
-
-Tuning in index.html:
-- TARGET_HEIGHT: Set character height in metres (0.25 = 25 cm tabletop action figure; 1.8 = life-size).
-- DIST & DROP  : Initial distance ahead of and below the phone camera.
+- tools/build_military_props.py: Builds all 3D props, textures, and updates both GLB and USDZ.
+- tools/optimize_and_animate.py: Generates Ghost's tactical combat sequence.
+- tools/build_ghost_usdz.py    : Compliant 64-byte aligned USDZ packager for iOS.
 
 Rebuilding:
-- python tools/optimize_and_animate.py
-- python tools/build_ghost_usdz.py
+- python tools/build_military_props.py
 
 Hosting:
 - Host the root folder on HTTPS (e.g. Netlify Drop, Vercel, GitHub Pages).
