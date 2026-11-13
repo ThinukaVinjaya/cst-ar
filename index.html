@@ -29,11 +29,11 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
 <body>
 <header>
   <h1>CST LAN Challenge</h1>
-  <p>Point your camera at the table or loot box, and hold steady.</p>
+  <p>Point your camera at your table centerpiece or loot box.</p>
 </header>
 <div id="viewer-container">
-  <model-viewer id="mv" src="models/ghost_animated.glb" ios-src="models/ghost_animated.usdz" alt="Ghost military operator" autoplay animation-name="Action"
-    camera-controls camera-orbit="0deg 75deg 2m" shadow-intensity="1" interaction-prompt="none"
+  <model-viewer id="mv" src="models/ghost_animated.glb" ios-src="models/ghost_animated.usdz" alt="Call of Duty 4 Ghost Military AR Perimeter" autoplay animation-name="Action"
+    camera-controls camera-orbit="0deg 70deg 3.5m" shadow-intensity="1" interaction-prompt="none"
     ar ar-modes="scene-viewer webxr quick-look" ar-placement="floor" ar-scale="fixed" loading="eager"
     scale="0.131 0.131 0.131">
     <button slot="ar-button" id="ar">Open AR camera</button>
@@ -44,7 +44,7 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
   <div id="status"></div>
   <button id="exit">Close</button>
 </div>
-<p id="note">Ghost appears on the table automatically. No touching needed.</p>
+<p id="note">Ghost, sandbags, ammo crates, claymore, and intel laptop fortify the table around your centerpiece.</p>
 <script>
 const mv=document.getElementById('mv');
 mv.addEventListener('load',()=>{ if(!mv.canActivateAR) document.getElementById('note').textContent='AR is not supported on this phone or browser. On iPhone use Safari; on Android use Chrome.'; });
