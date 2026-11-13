@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CST LAN Challenge – AR Squad</title>
 <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 <style>
 :root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a}
 *{box-sizing:border-box}
@@ -17,6 +18,11 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
 #ar{position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer}
 #ar:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 #note{margin:0;padding:8px 20px;color:var(--mute);text-align:center;min-height:2.4em}
+#xr{display:none;position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer}
+#xr:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+#overlay{display:none;position:fixed;inset:0;pointer-events:none}
+#status{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:rgba(20,23,15,.8);color:var(--ink);padding:10px;font-size:1.2rem}
+#exit{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);pointer-events:auto;padding:12px 28px;font:inherit;font-size:1.2rem;background:rgba(20,23,15,.85);color:var(--ink);border:1px solid #3a4128}
 </style>
 </head>
 <body>
@@ -29,10 +35,59 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
   ar ar-modes="scene-viewer webxr quick-look" ar-placement="floor" ar-scale="fixed" loading="eager">
   <button slot="ar-button" id="ar">Open AR camera</button>
 </model-viewer>
+<button id="xr">Open AR camera</button>
+<div id="overlay"><div id="status"></div><button id="exit">Close</button></div>
 <p id="note">Allow camera access. The squad places itself on the table around the box. No touching needed.</p>
 <script>
 const mv=document.getElementById('mv');
 mv.addEventListener('load',()=>{ if(!mv.canActivateAR) document.getElementById('note').textContent='AR is not supported on this phone or browser. On iPhone use Safari; on Android use Chrome.'; });
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+const $=id=>document.getElementById(id), mv=$('mv');
+/* Android Chrome (WebXR): own AR session. The squad places itself on the table and CANNOT be moved or resized.
+   iPhone / other browsers: falls back to the phone's built-in AR viewer (model-viewer). */
+const ok=navigator.xr && await navigator.xr.isSessionSupported('immersive-ar').catch(()=>false);
+if(ok){ mv.removeAttribute('ar'); $('xr').style.display='block'; $('note').textContent='Tap the button, point at the loot box and hold steady. The squad places itself on the table.'; }
+let renderer,scene,camera,mixer,squad,reticle,session,hitSource,refSpace,anchorSpace,placed,hold,lastPos=new THREE.Vector3(),gltf;
+async function load(){ if(gltf) return; gltf=await new GLTFLoader().loadAsync('models/squad.glb'); }
+$('xr').onclick=async()=>{
+  await load();
+  renderer=new THREE.WebGLRenderer({antialias:true,alpha:true}); renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
+  Object.assign(renderer.domElement.style,{position:'fixed',inset:0,zIndex:0}); document.body.appendChild(renderer.domElement);
+  scene=new THREE.Scene(); camera=new THREE.PerspectiveCamera();
+  scene.add(new THREE.HemisphereLight(0xffffff,0x666655,2.4)); const d=new THREE.DirectionalLight(0xffffff,2); d.position.set(1,3,1); scene.add(d);
+  squad=gltf.scene; squad.visible=false; squad.traverse(o=>o.frustumCulled=false); scene.add(squad);
+  mixer=new THREE.AnimationMixer(squad); const patrol=gltf.animations.find(a=>a.name==='Patrol')||gltf.animations[0]; mixer.clipAction(patrol).play();
+  reticle=new THREE.Mesh(new THREE.RingGeometry(.07,.09,32).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({color:0xff6a1a})); reticle.visible=false; scene.add(reticle);
+  placed=false; hold=0; anchorSpace=null;
+  const ov=$('overlay'); ov.style.display='block'; $('status').textContent='Move the phone slowly over the table…';
+  try{ session=await navigator.xr.requestSession('immersive-ar',{requiredFeatures:['hit-test'],optionalFeatures:['dom-overlay','anchors'],domOverlay:{root:ov}}); }
+  catch(e){ ov.style.display='none'; renderer.domElement.remove(); $('note').textContent='Could not start AR. Allow camera access and try again.'; return; }
+  renderer.xr.setReferenceSpaceType('local'); await renderer.xr.setSession(session);
+  refSpace=renderer.xr.getReferenceSpace(); hitSource=await session.requestHitTestSource({space:await session.requestReferenceSpace('viewer')});
+  $('exit').onclick=()=>session.end();
+  session.addEventListener('end',()=>{ renderer.setAnimationLoop(null); ov.style.display='none'; renderer.domElement.remove(); renderer.dispose(); });
+  const clock=new THREE.Clock(); const up=new THREE.Vector3(), q=new THREE.Quaternion();
+  renderer.setAnimationLoop((t,frame)=>{
+    const dt=clock.getDelta(); mixer.update(dt);
+    if(frame && !placed){
+      const hits=frame.getHitTestResults(hitSource); const pose=hits[0]&&hits[0].getPose(refSpace);
+      if(pose){ const p=pose.transform.position, o=pose.transform.orientation; q.set(o.x,o.y,o.z,o.w); up.set(0,1,0).applyQuaternion(q);
+        const pos=new THREE.Vector3(p.x,p.y,p.z);
+        if(up.y>0.9){ reticle.visible=true; reticle.position.copy(pos);
+          hold = pos.distanceTo(lastPos)<0.02 ? hold+dt : 0; lastPos.copy(pos);
+          $('status').textContent='Hold steady…';
+          if(hold>1.2){ placed=true; reticle.visible=false; squad.position.copy(pos); squad.visible=true; $('status').style.display='none';
+            try{ hits[0].createAnchor().then(a=>anchorSpace=a.anchorSpace).catch(()=>{}); }catch(e){}
+            hitSource.cancel(); } }
+        else { hold=0; reticle.visible=false; $('status').textContent='Aim at the table top'; } }
+      else { hold=0; reticle.visible=false; $('status').textContent='Move the phone slowly over the table…'; }
+    }
+    if(placed && anchorSpace){ const ap=frame.getPose(anchorSpace,refSpace); if(ap) squad.position.set(ap.transform.position.x,ap.transform.position.y,ap.transform.position.z); }
+    renderer.render(scene,camera); });
+};
 </script>
 </body>
 </html>
