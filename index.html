@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CST LAN Challenge – AR Drop</title>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+<style>
+:root{--bg:#14170f;--panel:#1f2417;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a;--line:#3a4128}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{padding:16px 18px 8px}
+h1{margin:0;font-size:2rem;line-height:1;letter-spacing:.02em;font-weight:700}
+header p{margin:6px 0 0;color:var(--mute);font-size:1.05rem}
+nav{display:flex;gap:8px;padding:8px 18px}
+nav button{flex:1;padding:10px 6px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font:inherit;font-size:1.15rem;cursor:pointer}
+nav button[aria-selected="true"]{background:var(--flare);color:#14170f;border-color:var(--flare);font-weight:700}
+nav button:disabled{opacity:.35;cursor:not-allowed}
+nav button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+main{flex:1;min-height:0;padding:0 18px 12px;display:flex;flex-direction:column}
+model-viewer{flex:1;width:100%;min-height:320px;background:radial-gradient(circle at 50% 40%,#2c3320,#14170f 75%);--poster-color:transparent}
+#ar-btn{position:absolute;inset:auto 16px 16px 16px;background:var(--flare);color:#14170f;border:0;padding:22px 26px;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer}
+#hint{margin:10px 0 0;color:var(--mute);font-size:1rem;text-align:center}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <h1>CST LAN Challenge</h1>
+  
+</header>
+<main>
+  <model-viewer id="mv" src="models/squad.glb" alt="Soldiers standing in a ring around the loot box" camera-controls auto-rotate shadow-intensity="1" shadow-softness="0.8"
+    ar ar-modes="webxr scene-viewer quick-look" ar-placement="floor" ar-scale="fixed"
+    interaction-prompt="none" touch-action="pan-y" loading="eager">
+    <button slot="ar-button" id="ar-btn">Tap to open camera</button>
+  </model-viewer>
+  <p id="hint">Allow camera access. Move the phone slowly over the table, tap to place, then drag to line the circle up with the box. Pinch to resize.</p>
+</main>
+
+<script>
+/* Try to open AR straight away. Browsers usually block this until the first tap,
+   so we also start AR on the first touch anywhere on the page. */
+const mv=document.getElementById('mv');
+let started=false;
+function start(){ if(started) return; started=true; try{ mv.activateAR(); }catch(e){ started=false; } }
+mv.addEventListener('load',()=>{ setTimeout(start,300); });
+document.addEventListener('pointerup',start,{once:false});
+</script>
+</body>
+</html>
