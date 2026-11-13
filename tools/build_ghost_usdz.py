@@ -1,15 +1,87 @@
 #!/usr/bin/env python3
 """
-Converts the optimized models/ghost_animated.glb to models/ghost_animated.usdz for iOS Apple AR Quick Look.
-Includes:
-- Tabletop auto-scaling (height ~0.25m)
-- Preliminary horizontal plane anchoring (auto-places on table without tapping)
-- Full materials and diffuse textures
-- Dynamic military character animation with weapon sway, arm movements, and breathing
+Converts models/ghost_animated.glb to models/ghost_animated.usdz for iOS Apple AR Quick Look.
+Strictly complies with Apple ARKit USDZ Specifications:
+1. Strict 64-byte alignment for all assets inside the archive (with 0x1986 padding tag).
+2. Tabletop auto-scaling (height ~0.25m).
+3. Preliminary horizontal plane anchoring (auto-places on table without tapping).
+4. Continuous tactical combat military action loop.
 """
-import struct, json, os, zipfile, math
+import struct, json, os, zlib, math
 
-def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
+class ArkitUsdzWriter:
+    """Writes an uncompressed ZIP archive where every file data segment is aligned to a 64-byte boundary."""
+    def __init__(self, filename):
+        self.filename = filename
+        self.f = open(filename, 'wb')
+        self.entries = []
+
+    def add_file(self, arcname, data):
+        cur_offset = self.f.tell()
+        arcname_bytes = arcname.encode('utf-8')
+        name_len = len(arcname_bytes)
+
+        # 64-byte alignment calculation
+        # Local header fixed length: 30 bytes
+        base_len = cur_offset + 30 + name_len
+        pad_needed = (64 - (base_len % 64)) % 64
+        if pad_needed < 4:
+            pad_needed += 64  # USDZ padding header is 4 bytes (tag 0x1986 + 2 bytes len)
+
+        extra = struct.pack('<HH', 0x1986, pad_needed - 4) + b'\x00' * (pad_needed - 4)
+        extra_len = len(extra)
+
+        data_offset = cur_offset + 30 + name_len + extra_len
+        assert data_offset % 64 == 0, f"Offset {data_offset} not 64-byte aligned!"
+
+        crc = zlib.crc32(data) & 0xffffffff
+        size = len(data)
+
+        # Local file header
+        header = struct.pack('<4s5H3I2H',
+            b'PK\x03\x04',
+            20, 0, 0, 0, 0,
+            crc, size, size,
+            name_len, extra_len
+        )
+        self.f.write(header)
+        self.f.write(arcname_bytes)
+        self.f.write(extra)
+        self.f.write(data)
+
+        self.entries.append({
+            'name': arcname_bytes,
+            'crc': crc,
+            'size': size,
+            'offset': cur_offset,
+            'extra': extra
+        })
+
+    def close(self):
+        cd_start = self.f.tell()
+        for e in self.entries:
+            cd_header = struct.pack('<4s6H3I5H2I',
+                b'PK\x01\x02',
+                20, 20, 0, 0, 0, 0,
+                e['crc'], e['size'], e['size'],
+                len(e['name']), len(e['extra']), 0, 0, 0, 0,
+                e['offset']
+            )
+            self.f.write(cd_header)
+            self.f.write(e['name'])
+            self.f.write(e['extra'])
+
+        cd_len = self.f.tell() - cd_start
+        eocd = struct.pack('<4s4H2IH',
+            b'PK\x05\x06',
+            0, 0,
+            len(self.entries), len(self.entries),
+            cd_len, cd_start, 0
+        )
+        self.f.write(eocd)
+        self.f.close()
+
+def build_usdz(glb_path, out_usdz_path, target_height=0.25):
     with open(glb_path, 'rb') as f:
         magic, version, length = struct.unpack('<4sII', f.read(12))
         chunk0_len, _ = struct.unpack('<II', f.read(8))
@@ -56,11 +128,9 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
     scale_factor = (target_height / raw_height) if target_height else 1.0
     print(f"Model raw height: {raw_height:.3f}m, Target scale factor: {scale_factor:.4f}")
 
-    # Extract textures
-    textures_dir = 'scratch/ghost_usdz_build/textures'
-    os.makedirs(textures_dir, exist_ok=True)
+    # Extract texture bytes
     images = gltf.get('images', [])
-    tex_files = {}
+    tex_files = {} # img_idx -> (filename, bytes)
     for i, img in enumerate(images):
         bv_idx = img.get('bufferView')
         if bv_idx is not None:
@@ -70,13 +140,11 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
             img_bytes = bin_buf[offset:offset+length]
             mime = img.get('mimeType', 'image/jpeg')
             ext = 'png' if 'png' in mime else 'jpg'
-            fname = f'tex_{i}.{ext}'
-            with open(os.path.join(textures_dir, fname), 'wb') as out_f:
-                out_f.write(img_bytes)
-            tex_files[i] = fname
+            fname = f'textures/tex_{i}.{ext}'
+            tex_files[i] = (fname, img_bytes)
 
-    # Select animation
-    selected_anim = next((a for a in gltf['animations'] if a['name'] == anim_name), gltf['animations'][0])
+    # Master animation
+    selected_anim = gltf['animations'][0]
     anim_data = {}
     max_frame = 0
 
@@ -143,7 +211,7 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
             if tex_idx < len(textures):
                 img_idx = textures[tex_idx].get('source')
                 if img_idx in tex_files:
-                    tex_fname = tex_files[img_idx]
+                    tex_fname = tex_files[img_idx][0]
 
         m_name = f'Material_{mat_idx}'
         usda_lines.append(f'        def Material "{m_name}"')
@@ -164,7 +232,7 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
             usda_lines.append('            def Shader "DiffuseTex"')
             usda_lines.append('            {')
             usda_lines.append('                uniform token info:id = "UsdUVTexture"')
-            usda_lines.append(f'                asset inputs:file = @textures/{tex_fname}@')
+            usda_lines.append(f'                asset inputs:file = @{tex_fname}@')
             usda_lines.append(f'                float2 inputs:st.connect = </World/Materials/{m_name}/PrimvarReader.outputs:result>')
             usda_lines.append('                token inputs:sourceColorSpace = "sRGB"')
             usda_lines.append('                float3 outputs:rgb')
@@ -281,16 +349,16 @@ def build_usdz(glb_path, out_usdz_path, target_height=0.25, anim_name='Idle'):
     usda_lines.append('    }')
     usda_lines.append('}')
 
-    usda_file = 'scratch/ghost_usdz_build/ghost.usda'
-    with open(usda_file, 'w', encoding='utf-8') as out_f:
-        out_f.write("\n".join(usda_lines))
+    usda_content = "\n".join(usda_lines).encode('utf-8')
 
-    with zipfile.ZipFile(out_usdz_path, 'w', compression=zipfile.ZIP_STORED) as zf:
-        zf.write(usda_file, 'ghost.usda')
-        for fname in os.listdir(textures_dir):
-            zf.write(os.path.join(textures_dir, fname), f'textures/{fname}')
+    # Write using strictly 64-byte aligned ArkitUsdzWriter
+    writer = ArkitUsdzWriter(out_usdz_path)
+    writer.add_file('ghost.usda', usda_content)
+    for img_idx, (tex_name, img_bytes) in tex_files.items():
+        writer.add_file(tex_name, img_bytes)
+    writer.close()
 
-    print(f"Successfully generated USDZ: {out_usdz_path} ({os.path.getsize(out_usdz_path)/1024/1024:.2f} MB)")
+    print(f"Successfully generated 64-byte aligned USDZ: {out_usdz_path} ({os.path.getsize(out_usdz_path)/1024/1024:.2f} MB)")
 
 if __name__ == '__main__':
-    build_usdz('models/ghost_animated.glb', 'models/ghost_animated.usdz', target_height=0.25, anim_name='Idle')
+    build_usdz('models/ghost_animated.glb', 'models/ghost_animated.usdz', target_height=0.25)

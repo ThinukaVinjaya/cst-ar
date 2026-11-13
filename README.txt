@@ -1,24 +1,27 @@
 CST LAN Challenge - Animated AR Ghost Operator (Android & iOS)
 
 Overview:
-- Standalone animated military operator ("Ghost") with rich military action animations:
-  1. Idle   - Combat breathing, weapon sway, hand micro-movements.
-  2. Aim    - Weapon raised to eye-level sights, cheek weld, combat lean.
-  3. Fire   - 3-round tactical burst with realistic recoil kick, muzzle climb, and recovery.
-  4. Reload - Magazine drop, fresh mag insertion bump, bolt rack, and return to ready.
-  5. Scan   - 90-degree tactical sector sweep with coordinated weapon tracking.
+- Single animated military operator ("Ghost") performing an automatic continuous military action loop:
+  1. Tactical Combat Idle & breathing (0.0s - 2.0s)
+  2. Weapon Raise & Target Lock (2.0s - 3.5s)
+  3. 3-Round Burst Fire with weapon recoil kickback & muzzle climb (3.5s - 5.0s)
+  4. Perimeter Sector Sweep checking for threats (5.0s - 7.0s)
+  5. Tactical Recovery back to ready stance (7.0s - 8.5s)
+- Plays automatically without needing any buttons or manual selections.
 
-Optimization & Fast Loading:
-- models/ghost_animated.glb: Vertex buffer optimized by removing redundant attribute streams (saving ~2.8 MB) and pruning unused textures, loading ~50% faster on mobile networks.
-- Asynchronous preloader in index.html fetches the model during page render so AR opens immediately on tap.
-- Interactive action buttons in both the 2D preview and AR camera overlay for instant move triggering.
+iOS AR Quick Look Compatibility:
+- models/ghost_animated.usdz is strictly 64-byte aligned with the official 0x1986 USDZ padding tag. This resolves the Apple AR Quick Look "Object could not be opened" error.
+
+Android WebXR Compatibility:
+- models/ghost_animated.glb is optimized down to ~8.0 MB with clean geometry and PBR materials.
+- Instant camera-front placement with automatic tabletop height snapping.
 
 Files:
-- index.html                   : WebAR frontend with WebXR, Three.js, <model-viewer>, and action switcher.
-- models/ghost_animated.glb    : Optimized 3D model with 5 military animations.
-- models/ghost_animated.usdz   : Native Apple USDZ with preliminary horizontal plane anchoring for iPhone.
-- tools/optimize_and_animate.py: Re-packs GLB and generates the 5 action animation tracks.
-- tools/build_ghost_usdz.py    : Re-builds the USDZ package for iOS Quick Look.
+- index.html                   : WebAR frontend with WebXR, Three.js, <model-viewer>.
+- models/ghost_animated.glb    : Optimized 3D model with automatic "Action" loop.
+- models/ghost_animated.usdz   : Strictly 64-byte aligned Apple USDZ package for iPhone.
+- tools/optimize_and_animate.py: Builds the optimized GLB and Action animation.
+- tools/build_ghost_usdz.py    : Builds the 64-byte aligned USDZ package for iOS.
 
 Tuning in index.html:
 - TARGET_HEIGHT: Set character height in metres (0.25 = 25 cm tabletop action figure; 1.8 = life-size).

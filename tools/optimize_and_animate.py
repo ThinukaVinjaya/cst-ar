@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-Optimizes models/ghost_animated.glb and generates 5 rich military action animations:
-1. Idle   - Tactical combat breathing, weapon sway, and hand micro-movements.
-2. Aim    - Weapon raised to eye-level / sights, forward combat lean, steady hold.
-3. Fire   - 3-round tactical burst with authentic weapon recoil kick, muzzle climb, and recovery.
-4. Reload - Magazine drop, fresh mag insertion bump, bolt rack, and return to ready.
-5. Scan   - 90-degree tactical sector sweep with synchronized weapon tracking.
-
-Optimization:
-- Strips unused vertex attributes (TANGENT, TEXCOORD_1, TEXCOORD_2, TEXCOORD_3) saving ~4.5 MB.
-- Prunes unused textures/images.
-- Results in ~50-60% faster loading on mobile WebAR.
+Optimizes models/ghost_animated.glb and generates the recommended tactical military action loop:
+- Continuous, seamless 8.5-second cinematic military sequence:
+  1. Tactical Combat Idle & breathing (0.0s - 2.0s)
+  2. Weapon Raise & Target Lock (2.0s - 3.5s)
+  3. 3-Round Burst Fire with weapon recoil kickback & muzzle climb (3.5s - 5.0s)
+  4. Perimeter Sector Sweep checking for threats (5.0s - 7.0s)
+  5. Tactical Recovery back to ready stance (7.0s - 8.5s)
+Loops seamlessly without requiring manual button clicks!
 """
 import struct, json, os, math
 
@@ -24,16 +21,6 @@ def euler_to_quat(rx, ry, rz):
     qw = cx*cy*cz + sx*sy*sz
     mag = math.hypot(qx, qy, qz, qw) or 1.0
     return [qx/mag, qy/mag, qz/mag, qw/mag]
-
-def quat_mult(q1, q2):
-    x1, y1, z1, w1 = q1
-    x2, y2, z2, w2 = q2
-    return [
-        w1*x2 + x1*w2 + y1*z2 - z1*y2,
-        w1*y2 - x1*z2 + y1*w2 + z1*x2,
-        w1*z2 + x1*y2 - y1*x2 + z1*w2,
-        w1*w2 - x1*x2 - y1*y2 - z1*z2
-    ]
 
 def optimize_and_animate(input_glb, output_glb):
     with open(input_glb, 'rb') as f:
@@ -60,7 +47,6 @@ def optimize_and_animate(input_glb, output_glb):
         elem_fmt = format_map[comp_type]
         stride = bv.get('byteStride', struct.calcsize('<' + elem_fmt * num_comps))
 
-        # Pack tightly
         tight_fmt = '<' + elem_fmt * num_comps
         out_bytes = bytearray()
         for i in range(count):
@@ -83,12 +69,11 @@ def optimize_and_animate(input_glb, output_glb):
         new_bvs.append(bv)
         return len(new_bvs) - 1
 
-    # 1. Repack Primitives (strip TANGENT and extra TEXCOORDs)
+    # 1. Repack Primitives
     for m in gltf['meshes']:
         for p in m['primitives']:
-            # Indices
             idx_bytes, old_idx_acc = read_accessor_bytes(p['indices'])
-            bv_idx = add_buffer_data(idx_bytes, target=34963) # ELEMENT_ARRAY_BUFFER
+            bv_idx = add_buffer_data(idx_bytes, target=34963)
             new_idx_acc = {
                 'bufferView': bv_idx,
                 'componentType': old_idx_acc['componentType'],
@@ -100,13 +85,12 @@ def optimize_and_animate(input_glb, output_glb):
             new_accs.append(new_idx_acc)
             p['indices'] = len(new_accs) - 1
 
-            # Keep only POSITION, NORMAL, TEXCOORD_0
             new_attrs = {}
             for attr in ['POSITION', 'NORMAL', 'TEXCOORD_0']:
                 if attr in p['attributes']:
                     old_acc_idx = p['attributes'][attr]
                     attr_bytes, old_acc = read_accessor_bytes(old_acc_idx)
-                    bv_idx = add_buffer_data(attr_bytes, target=34962) # ARRAY_BUFFER
+                    bv_idx = add_buffer_data(attr_bytes, target=34962)
                     new_acc = {
                         'bufferView': bv_idx,
                         'componentType': old_acc['componentType'],
@@ -119,7 +103,7 @@ def optimize_and_animate(input_glb, output_glb):
                     new_attrs[attr] = len(new_accs) - 1
             p['attributes'] = new_attrs
 
-    # 2. Repack Images and Textures (prune unused)
+    # 2. Repack Images
     used_tex_indices = set()
     for m in gltf.get('materials', []):
         for k, v in m.items():
@@ -130,7 +114,6 @@ def optimize_and_animate(input_glb, output_glb):
 
     textures = gltf.get('textures', [])
     old_images = gltf.get('images', [])
-
     new_images = []
     old_img_to_new = {}
 
@@ -155,13 +138,13 @@ def optimize_and_animate(input_glb, output_glb):
             t['source'] = old_img_to_new[t['source']]
     gltf['images'] = new_images
 
-    # 3. Helper to add animation accessor
+    # 3. Add Animation Accessor
     def add_anim_accessor(times, values, typ):
         times_bytes = struct.pack(f'<{len(times)}f', *times)
         bv_time = add_buffer_data(times_bytes)
         acc_time = {
             'bufferView': bv_time,
-            'componentType': 5126, # FLOAT
+            'componentType': 5126,
             'count': len(times),
             'type': 'SCALAR',
             'min': [min(times)],
@@ -179,21 +162,19 @@ def optimize_and_animate(input_glb, output_glb):
         bv_val = add_buffer_data(val_bytes)
         acc_val = {
             'bufferView': bv_val,
-            'componentType': 5126, # FLOAT
+            'componentType': 5126,
             'count': len(values),
             'type': typ
         }
         new_accs.append(acc_val)
         acc_val_idx = len(new_accs) - 1
-
         return acc_time_idx, acc_val_idx
 
-    # Target nodes
-    NODE_HAND = 8       # hand_000_r.model_7 (arms & rifle)
-    NODE_UPPR = 22      # uppr_000_u.model_19 (torso)
-    NODE_HEAD = 25      # HeadPivot (head & helmet)
-    NODE_SWAY = 24      # Sway (stance)
-    NODE_ACCS = 5       # accs_000_u.model_5 (tactical gear)
+    NODE_HAND = 8       # hand_000_r.model_7
+    NODE_UPPR = 22      # uppr_000_u.model_19
+    NODE_HEAD = 25      # HeadPivot
+    NODE_SWAY = 24      # Sway
+    NODE_ACCS = 5       # accs_000_u.model_5
 
     BASE_HAND_T = [0.0, 1.00445, 0.0]
     BASE_UPPR_T = [0.0, 1.00445, 0.0]
@@ -205,9 +186,7 @@ def optimize_and_animate(input_glb, output_glb):
     def create_clip(name, duration, frame_gen_fn):
         num_frames = int(duration * FPS) + 1
         times = [i / FPS for i in range(num_frames)]
-
-        # Collect tracks
-        node_tracks = {} # (node_id, 'translation'|'rotation') -> [values]
+        node_tracks = {}
 
         for i, t in enumerate(times):
             data = frame_gen_fn(t, duration)
@@ -231,30 +210,72 @@ def optimize_and_animate(input_glb, output_glb):
 
         return {'name': name, 'samplers': samplers, 'channels': channels}
 
-    # ==================== ANIMATION 1: IDLE ====================
-    # Tactical breathing, weapon sway, hand micro-adjustments
-    def gen_idle(t, dur):
-        p = 2 * math.pi * t / dur
-        breath = math.sin(p)
-        sway = math.cos(p)
+    # RECOMMENDED MASTER SEQUENCE: Tactical Action Loop (8.5 seconds)
+    def gen_combat_sequence(t, dur):
+        # Phase 1: 0.0s - 2.0s: Combat Idle breathing & surveillance
+        # Phase 2: 2.0s - 3.5s: Raise weapon to aim down sights
+        # Phase 3: 3.5s - 5.0s: 3-round burst fire with recoil
+        # Phase 4: 5.0s - 7.0s: Tactical sector scan
+        # Phase 5: 7.0s - 8.5s: Return to ready stance
+        breath_p = 2 * math.pi * t / 2.0
+        breath = 0.006 * math.sin(breath_p)
+        sway = 0.003 * math.cos(breath_p)
 
-        # Torso breathing
-        uppr_t = [BASE_UPPR_T[0], BASE_UPPR_T[1] + 0.007 * breath, BASE_UPPR_T[2]]
-        uppr_r = euler_to_quat(0.015 * breath, 0.0, 0.0)
+        # Default ready pose values
+        aim_prog = 0.0
+        recoil = 0.0
+        scan_yaw = 0.0
 
-        # Hand/Rifle sway: breathing makes weapon rise & settle
-        hand_t = [BASE_HAND_T[0] + 0.003 * sway, BASE_HAND_T[1] + 0.010 * breath, BASE_HAND_T[2] + 0.004 * breath]
-        hand_r = euler_to_quat(0.025 * breath, 0.012 * sway, 0.008 * sway)
+        if t < 2.0:
+            pass # Idle
+        elif t < 3.5:
+            # Raise weapon
+            s = (t - 2.0) / 1.5
+            aim_prog = (1 - math.cos(s * math.pi)) / 2
+        elif t < 5.0:
+            # Holding aim & 3 burst shots at 3.7s, 4.1s, 4.5s
+            aim_prog = 1.0
+            for shot in [3.7, 4.1, 4.5]:
+                if shot <= t < shot + 0.16:
+                    dt = t - shot
+                    if dt < 0.04: recoil += math.sin(dt / 0.04 * math.pi / 2)
+                    else: recoil += math.cos((dt - 0.04) / 0.12 * math.pi / 2)
+            recoil = min(1.2, recoil)
+        elif t < 7.0:
+            # Sector scan while in alert ready
+            s = (t - 5.0) / 2.0
+            aim_prog = max(0.0, 1.0 - s * 1.5)
+            scan_yaw = 0.50 * math.sin(s * math.pi)
+        else:
+            # Return smoothly to idle
+            s = (t - 7.0) / 1.5
+            aim_prog = 0.0
+            scan_yaw = 0.0
 
-        # Head micro-scan
-        head_t = [BASE_HEAD_T[0], BASE_HEAD_T[1] + 0.004 * breath, BASE_HEAD_T[2]]
-        head_r = euler_to_quat(0.010 * breath, 0.035 * math.sin(p * 2), 0.0)
+        tremor = 0.001 * math.sin(t * 15) * aim_prog
 
-        # Accs follow torso
-        accs_t = [BASE_ACCS_T[0], BASE_ACCS_T[1] + 0.006 * breath, BASE_ACCS_T[2]]
+        # Hand / Weapon transform
+        hand_x = BASE_HAND_T[0] + 0.015 * aim_prog + 0.035 * math.sin(scan_yaw * 0.7) + sway
+        hand_y = BASE_HAND_T[1] + 0.050 * aim_prog + 0.010 * recoil + breath
+        hand_z = BASE_HAND_T[2] + 0.035 * aim_prog - 0.040 * recoil + tremor
 
-        # Stance sway
-        sway_r = euler_to_quat(0.0, 0.0, 0.008 * sway)
+        hand_rx = -0.22 * aim_prog + 0.12 * recoil + 0.02 * breath
+        hand_ry = -0.04 * aim_prog + scan_yaw * 0.70
+        hand_rz = 0.015 * aim_prog + 0.01 * sway
+
+        hand_t = [hand_x, hand_y, hand_z]
+        hand_r = euler_to_quat(hand_rx, hand_ry, hand_rz)
+
+        # Torso transform
+        uppr_t = [BASE_UPPR_T[0], BASE_UPPR_T[1] + breath, BASE_UPPR_T[2] + 0.020 * aim_prog - 0.012 * recoil]
+        uppr_r = euler_to_quat(0.08 * aim_prog - 0.04 * recoil + 0.012 * breath, scan_yaw * 0.40, 0.0)
+
+        # Head transform
+        head_t = [BASE_HEAD_T[0] + 0.012 * aim_prog, BASE_HEAD_T[1] - 0.015 * aim_prog + breath, BASE_HEAD_T[2] + 0.012 * aim_prog]
+        head_r = euler_to_quat(-0.10 * aim_prog + 0.03 * recoil, scan_yaw + 0.02 * math.sin(breath_p), 0.05 * aim_prog)
+
+        accs_t = [BASE_ACCS_T[0], BASE_ACCS_T[1] + breath, BASE_ACCS_T[2] + 0.016 * aim_prog]
+        sway_r = euler_to_quat(0.0, 0.0, 0.006 * sway)
 
         return {
             (NODE_UPPR, 'translation'): uppr_t, (NODE_UPPR, 'rotation'): uppr_r,
@@ -264,185 +285,8 @@ def optimize_and_animate(input_glb, output_glb):
             (NODE_SWAY, 'rotation'): sway_r
         }
 
-    # ==================== ANIMATION 2: AIM ====================
-    # Arms raise rifle to eye level, cheek weld, tight combat forward lean
-    def gen_aim(t, dur):
-        # 0 to 0.6s: raise weapon; 0.6 to 2.4s: steady hold; 2.4 to 3.0s: return
-        if t < 0.6:
-            progress = (1 - math.cos(math.pi * t / 0.6)) / 2
-        elif t < 2.4:
-            progress = 1.0
-        else:
-            progress = (1 + math.cos(math.pi * (t - 2.4) / 0.6)) / 2
-
-        tremor = 0.0015 * math.sin(t * 18)
-        breath = 0.003 * math.sin(2 * math.pi * t / 1.5)
-
-        # Hand raises rifle to sights
-        hand_t = [
-            BASE_HAND_T[0] + 0.015 * progress + tremor,
-            BASE_HAND_T[1] + 0.055 * progress + breath,
-            BASE_HAND_T[2] + 0.035 * progress + tremor
-        ]
-        # Pitch rifle up ~14 deg to aim straight ahead
-        hand_r = euler_to_quat(-0.24 * progress + tremor, -0.04 * progress, 0.015 * progress)
-
-        # Torso leans into combat stance
-        uppr_t = [BASE_UPPR_T[0], BASE_UPPR_T[1] - 0.005 * progress, BASE_UPPR_T[2] + 0.022 * progress]
-        uppr_r = euler_to_quat(0.09 * progress, 0.0, 0.0)
-
-        # Head cheek weld onto stock
-        head_t = [BASE_HEAD_T[0] + 0.012 * progress, BASE_HEAD_T[1] - 0.015 * progress, BASE_HEAD_T[2] + 0.015 * progress]
-        head_r = euler_to_quat(-0.11 * progress, -0.03 * progress, 0.06 * progress)
-
-        accs_t = [BASE_ACCS_T[0], BASE_ACCS_T[1], BASE_ACCS_T[2] + 0.018 * progress]
-
-        return {
-            (NODE_UPPR, 'translation'): uppr_t, (NODE_UPPR, 'rotation'): uppr_r,
-            (NODE_HAND, 'translation'): hand_t, (NODE_HAND, 'rotation'): hand_r,
-            (NODE_HEAD, 'translation'): head_t, (NODE_HEAD, 'rotation'): head_r,
-            (NODE_ACCS, 'translation'): accs_t
-        }
-
-    # ==================== ANIMATION 3: FIRE ====================
-    # 3-round tactical burst fire with sharp recoil impulse and recovery
-    def gen_fire(t, dur):
-        # In aim stance, shots at 0.35s, 0.65s, 0.95s
-        shots = [0.35, 0.65, 0.95]
-        recoil_kick = 0.0
-        for s in shots:
-            if s <= t < s + 0.18:
-                dt = t - s
-                if dt < 0.04:  # Sharp recoil kick
-                    recoil_kick += math.sin(dt / 0.04 * math.pi / 2)
-                else:          # Recovery
-                    recoil_kick += math.cos((dt - 0.04) / 0.14 * math.pi / 2)
-
-        recoil_kick = min(1.3, recoil_kick)
-
-        hand_t = [
-            BASE_HAND_T[0] + 0.015,
-            BASE_HAND_T[1] + 0.055 + 0.012 * recoil_kick,
-            BASE_HAND_T[2] + 0.035 - 0.045 * recoil_kick  # Recoil pushes back into shoulder
-        ]
-        hand_r = euler_to_quat(-0.24 + 0.13 * recoil_kick, -0.04, 0.02 * recoil_kick)
-
-        uppr_t = [BASE_UPPR_T[0], BASE_UPPR_T[1], BASE_UPPR_T[2] + 0.022 - 0.015 * recoil_kick]
-        uppr_r = euler_to_quat(0.09 - 0.05 * recoil_kick, 0.0, 0.0)
-
-        head_t = [BASE_HEAD_T[0] + 0.012, BASE_HEAD_T[1] - 0.015, BASE_HEAD_T[2] + 0.015 - 0.010 * recoil_kick]
-        head_r = euler_to_quat(-0.11 + 0.04 * recoil_kick, -0.03, 0.06)
-
-        accs_t = [BASE_ACCS_T[0], BASE_ACCS_T[1], BASE_ACCS_T[2] + 0.018 - 0.010 * recoil_kick]
-
-        return {
-            (NODE_UPPR, 'translation'): uppr_t, (NODE_UPPR, 'rotation'): uppr_r,
-            (NODE_HAND, 'translation'): hand_t, (NODE_HAND, 'rotation'): hand_r,
-            (NODE_HEAD, 'translation'): head_t, (NODE_HEAD, 'rotation'): head_r,
-            (NODE_ACCS, 'translation'): accs_t
-        }
-
-    # ==================== ANIMATION 4: RELOAD ====================
-    # Lower weapon, mag slap bump, rack bolt, return to ready
-    def gen_reload(t, dur):
-        # 0.0 - 0.8s: tilt weapon & inspect magwell
-        # 0.8 - 1.6s: grab magazine from vest
-        # 1.6 - 2.2s: slap magazine into receiver (bump!)
-        # 2.2 - 2.8s: rack bolt
-        # 2.8 - 3.5s: return to ready
-        mag_bump = 0.0
-        if 1.7 <= t <= 1.85:
-            mag_bump = math.sin((t - 1.7) / 0.15 * math.pi)
-
-        rack_pull = 0.0
-        if 2.25 <= t <= 2.55:
-            rack_pull = math.sin((t - 2.25) / 0.3 * math.pi)
-
-        if t < 0.8:
-            tilt = math.sin(t / 0.8 * math.pi / 2)
-        elif t < 2.8:
-            tilt = 1.0
-        else:
-            tilt = math.cos((t - 2.8) / 0.7 * math.pi / 2)
-
-        hand_t = [
-            BASE_HAND_T[0] - 0.035 * tilt,
-            BASE_HAND_T[1] - 0.025 * tilt + 0.035 * mag_bump,
-            BASE_HAND_T[2] - 0.020 * tilt - 0.030 * rack_pull
-        ]
-        hand_r = euler_to_quat(
-            0.15 * tilt + 0.05 * mag_bump,
-            -0.10 * tilt,
-            0.35 * tilt - 0.08 * rack_pull
-        )
-
-        uppr_t = [BASE_UPPR_T[0], BASE_UPPR_T[1], BASE_UPPR_T[2]]
-        uppr_r = euler_to_quat(0.06 * tilt, -0.04 * tilt, 0.0)
-
-        # Head looks down at magwell
-        head_t = [BASE_HEAD_T[0], BASE_HEAD_T[1] - 0.015 * tilt, BASE_HEAD_T[2] + 0.010 * tilt]
-        head_r = euler_to_quat(-0.25 * tilt, -0.08 * tilt, 0.0)
-
-        accs_t = [BASE_ACCS_T[0], BASE_ACCS_T[1] - 0.010 * (1 if 0.8 < t < 1.6 else 0), BASE_ACCS_T[2]]
-
-        return {
-            (NODE_UPPR, 'translation'): uppr_t, (NODE_UPPR, 'rotation'): uppr_r,
-            (NODE_HAND, 'translation'): hand_t, (NODE_HAND, 'rotation'): hand_r,
-            (NODE_HEAD, 'translation'): head_t, (NODE_HEAD, 'rotation'): head_r,
-            (NODE_ACCS, 'translation'): accs_t
-        }
-
-    # ==================== ANIMATION 5: SCAN ====================
-    # 90-degree tactical sector sweep with rifle tracking
-    def gen_scan(t, dur):
-        # 0.0 -> 1.5s: turn left (yaw +0.65 rad)
-        # 1.5 -> 2.2s: hold left
-        # 2.2 -> 3.7s: sweep right (yaw -0.65 rad)
-        # 3.7 -> 4.3s: hold right
-        # 4.3 -> 5.0s: return center
-        if t < 1.5:
-            yaw = 0.65 * math.sin(t / 1.5 * math.pi / 2)
-        elif t < 2.2:
-            yaw = 0.65
-        elif t < 3.7:
-            p = (t - 2.2) / 1.5
-            yaw = 0.65 - 1.30 * (1 - math.cos(p * math.pi)) / 2
-        elif t < 4.3:
-            yaw = -0.65
-        else:
-            p = (t - 4.3) / 0.7
-            yaw = -0.65 * (1 + math.cos(p * math.pi)) / 2
-
-        breath = 0.005 * math.sin(2 * math.pi * t / 2.5)
-
-        # Head turns fully
-        head_t = [BASE_HEAD_T[0], BASE_HEAD_T[1] + breath, BASE_HEAD_T[2]]
-        head_r = euler_to_quat(0.02, yaw, 0.0)
-
-        # Hands & rifle track the scan at ~75% angle
-        hand_t = [BASE_HAND_T[0] + 0.04 * math.sin(yaw * 0.7), BASE_HAND_T[1] + breath, BASE_HAND_T[2]]
-        hand_r = euler_to_quat(-0.08, yaw * 0.75, 0.02 * math.sin(yaw))
-
-        # Upper body turns ~45% angle
-        uppr_t = [BASE_UPPR_T[0], BASE_UPPR_T[1] + breath, BASE_UPPR_T[2]]
-        uppr_r = euler_to_quat(0.02, yaw * 0.45, 0.0)
-
-        accs_t = [BASE_ACCS_T[0], BASE_ACCS_T[1] + breath, BASE_ACCS_T[2]]
-
-        return {
-            (NODE_UPPR, 'translation'): uppr_t, (NODE_UPPR, 'rotation'): uppr_r,
-            (NODE_HAND, 'translation'): hand_t, (NODE_HAND, 'rotation'): hand_r,
-            (NODE_HEAD, 'translation'): head_t, (NODE_HEAD, 'rotation'): head_r,
-            (NODE_ACCS, 'translation'): accs_t
-        }
-
-    # Generate the 5 clips
     clips = [
-        create_clip('Idle', 4.0, gen_idle),
-        create_clip('Aim', 3.0, gen_aim),
-        create_clip('Fire', 2.0, gen_fire),
-        create_clip('Reload', 3.5, gen_reload),
-        create_clip('Scan', 5.0, gen_scan)
+        create_clip('Action', 8.5, gen_combat_sequence)
     ]
     gltf['animations'] = clips
 
@@ -453,11 +297,8 @@ def optimize_and_animate(input_glb, output_glb):
 
     json_str = json.dumps(gltf, separators=(',', ':'))
     json_bytes = json_str.encode('utf-8')
-    while len(json_bytes) % 4 != 0:
-        json_bytes += b' '
-
-    while len(new_bin) % 4 != 0:
-        new_bin.append(0)
+    while len(json_bytes) % 4 != 0: json_bytes += b' '
+    while len(new_bin) % 4 != 0: new_bin.append(0)
 
     total_len = 12 + 8 + len(json_bytes) + 8 + len(new_bin)
     out_glb = bytearray()
@@ -472,9 +313,7 @@ def optimize_and_animate(input_glb, output_glb):
 
     in_size = os.path.getsize(input_glb) / 1024 / 1024
     out_size = os.path.getsize(output_glb) / 1024 / 1024
-    print(f"Original size: {in_size:.2f} MB -> Optimized size: {out_size:.2f} MB (Saved {(1 - out_size/in_size)*100:.1f}%)")
-    print(f"Generated animations: {[c['name'] for c in clips]}")
+    print(f"GLB optimized: {out_size:.2f} MB. Recommended animation 'Action' generated successfully!")
 
 if __name__ == '__main__':
     optimize_and_animate('models/ghost_animated.glb', 'models/ghost_animated.glb')
-
