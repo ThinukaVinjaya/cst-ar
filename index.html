@@ -32,12 +32,8 @@ header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
 .ar-cta:disabled{opacity:.6;cursor:default}
 .ar-cta:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 #ios-ar img{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-#cam-bg{display:none;position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:10;background:#000}
-body.ios-ar-active #cam-bg{display:block}
-body.ios-ar-active #stage{position:fixed;inset:0;width:100%;height:100%;background:transparent;z-index:15}
-body.ios-ar-active .ar-cta{display:none!important}
 #note{margin:0;padding:8px 20px;color:var(--mute);text-align:center;min-height:2.4em;font-size:1.05rem}
-#overlay{display:none;position:fixed;inset:0;pointer-events:none;z-index:25}
+#overlay{display:none;position:fixed;inset:0;pointer-events:none;z-index:20}
 #status{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:rgba(20,23,15,.85);color:var(--ink);padding:10px 16px;font-size:1.2rem;border-radius:4px}
 #exit{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);pointer-events:auto;padding:12px 28px;font:inherit;font-size:1.2rem;background:rgba(20,23,15,.9);color:var(--ink);border:1px solid #3a4128;border-radius:4px;cursor:pointer}
 </style>
@@ -48,7 +44,6 @@ body.ios-ar-active .ar-cta{display:none!important}
   <p>Tap Open AR camera, scan the table, and walk 360° around Ghost.</p>
 </header>
 
-<video id="cam-bg" autoplay muted playsinline></video>
 <div id="stage">
   <div id="loader">
     <div id="load-text">Downloading Ghost Salute…</div>
@@ -57,7 +52,10 @@ body.ios-ar-active .ar-cta{display:none!important}
   </div>
   <button id="xr" class="ar-cta" disabled>Loading Ghost…</button>
   <a id="android-sv" class="ar-cta" href="#">Open AR camera</a>
-  <button id="ios-ar" class="ar-cta" disabled>Loading Ghost…</button>
+  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute_ios.usdz#allowsContentScaling=0">
+    <img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+    Open AR camera
+  </a>
 </div>
 
 <div id="overlay">
@@ -76,7 +74,6 @@ const TARGET_HEIGHT = 0.25; // 25 cm tabletop height (set to 1.8 for life-size)
 
 const $ = id => document.getElementById(id);
 const stage = $('stage'), xrBtn = $('xr'), androidSvBtn = $('android-sv'), iosBtn = $('ios-ar'), note = $('note');
-const camBg = $('cam-bg');
 const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBtn = $('retry');
 const ov = $('overlay'), statusEl = $('status');
 
@@ -157,9 +154,7 @@ function updateButtons() {
     xrBtn.style.display = 'none';
     androidSvBtn.style.display = 'none';
     iosBtn.style.display = 'block';
-    iosBtn.disabled = !modelReady;
-    iosBtn.textContent = modelReady ? 'Open AR camera' : 'Loading Ghost…';
-    if (modelReady) note.textContent = 'Tap Open AR camera to place animated Ghost directly from your S3 model URL.';
+    if (modelReady) note.textContent = 'Tap Open AR camera, scan the real table, and walk 360° around Ghost.';
   } else if (isAndroid) {
     xrBtn.style.display = 'none';
     androidSvBtn.style.display = 'block';
@@ -353,12 +348,8 @@ async function loadFBXModel() {
 retryBtn.onclick = loadFBXModel;
 loadFBXModel();
 
-// ---- Preview & iOS Live-Camera Render + Animation Loop ----
+// ---- Preview Render & Animation Loop ----
 let lastPreviewTick = performance.now();
-let iosCameraActive = false;
-let iosHasGyro = false;
-const iosTargetQuat = new THREE.Quaternion();
-
 function previewLoop() {
   const now = performance.now();
   const dt = Math.min(Math.max((now - lastPreviewTick) / 1000, 0.001), 0.1);
@@ -367,13 +358,7 @@ function previewLoop() {
     mixer.update(dt);
     refreshSkeletons();
   }
-  if (iosCameraActive) {
-    if (iosHasGyro) {
-      camera.quaternion.slerp(iosTargetQuat, Math.min(1, dt * 14));
-    }
-  } else {
-    controls.update();
-  }
+  controls.update();
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(previewLoop);
@@ -592,165 +577,12 @@ xrBtn.onclick = async () => {
   });
 };
 
-// ---- iOS Safari Live Camera AR (Uses Already-Loaded S3 FBX + Salute Animation Directly, Zero USDZ Download!) ----
-let iosStream = null;
-let iosPlaced = false;
-const iosZee = new THREE.Vector3(0, 0, 1);
-const iosEuler = new THREE.Euler();
-const iosQ0 = new THREE.Quaternion();
-const iosQ1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
-const iosFwd = new THREE.Vector3();
-
-function getScreenOrientRad() {
-  const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
-    ? screen.orientation.angle
-    : (typeof window.orientation === 'number' ? window.orientation : 0);
-  return THREE.MathUtils.degToRad(angle);
-}
-
-function placeGhostInFrontOfIosCamera(quat) {
-  iosFwd.set(0, 0, -1).applyQuaternion(quat);
-  let horizLen = Math.hypot(iosFwd.x, iosFwd.z);
-  let hx = 0, hz = -1;
-  if (horizLen > 0.05) {
-    hx = iosFwd.x / horizLen;
-    hz = iosFwd.z / horizLen;
-  }
-  // Project along gaze onto a virtual tabletop if looking down, otherwise place comfortably ahead
-  let dist = 0.62;
-  let yPos = -0.18;
-  if (iosFwd.y < -0.15) {
-    const tPlane = -0.35 / iosFwd.y;
-    dist = Math.min(Math.max(tPlane * horizLen, 0.42), 0.88);
-    yPos = -0.35;
-  }
-  modelRoot.position.set(hx * dist, yPos, hz * dist);
-  modelRoot.rotation.set(0, Math.atan2(-hx, -hz), 0);
-  modelRoot.visible = true;
-}
-
-function onIosDeviceOrientation(ev) {
-  if (!iosCameraActive || ev.alpha === null || ev.beta === null || ev.gamma === null) return;
-  const alpha = THREE.MathUtils.degToRad(ev.alpha);
-  const beta = THREE.MathUtils.degToRad(ev.beta);
-  const gamma = THREE.MathUtils.degToRad(ev.gamma);
-  const orient = getScreenOrientRad();
-
-  iosEuler.set(beta, alpha, -gamma, 'YXZ');
-  iosTargetQuat.setFromEuler(iosEuler);
-  iosTargetQuat.multiply(iosQ1);
-  iosTargetQuat.multiply(iosQ0.setFromAxisAngle(iosZee, -orient));
-
-  if (!iosHasGyro) {
-    iosHasGyro = true;
-    camera.quaternion.copy(iosTargetQuat);
-  }
-  if (!iosPlaced) {
-    placeGhostInFrontOfIosCamera(iosTargetQuat);
-    iosPlaced = true;
-  }
-}
-
-function onIosStageTap() {
-  if (!iosCameraActive) return;
-  if (iosHasGyro) {
-    placeGhostInFrontOfIosCamera(iosTargetQuat);
-  } else {
-    modelRoot.position.set(0, -0.15, -0.60);
-    modelRoot.rotation.set(0, 0, 0);
-  }
-}
-
-function stopIosCameraAR() {
-  if (!iosCameraActive) return;
-  iosCameraActive = false;
-  iosHasGyro = false;
-  iosPlaced = false;
-  window.removeEventListener('deviceorientation', onIosDeviceOrientation);
-  renderer.domElement.removeEventListener('pointerdown', onIosStageTap);
-
-  if (iosStream) {
-    iosStream.getTracks().forEach(tr => tr.stop());
-    iosStream = null;
-  }
-  camBg.srcObject = null;
-  document.body.classList.remove('ios-ar-active');
-  ov.style.display = 'none';
-
-  previewFloor.visible = true;
-  modelRoot.visible = true;
-  modelRoot.position.set(0, 0, 0);
-  modelRoot.rotation.set(0, 0, 0);
-  camera.position.set(0, 0.20, 0.56);
-  camera.quaternion.identity();
-  controls.target.set(0, 0.12, 0);
-  controls.enabled = true;
-  controls.update();
-  onResize();
-}
-
-iosBtn.onclick = async () => {
-  if (!modelReady || !loadedFbx || iosCameraActive) return;
-
-  // Request iOS gyroscope permission inside user tap gesture
-  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    try { await DeviceOrientationEvent.requestPermission(); } catch (_) {}
-  }
-
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    note.textContent = 'Camera access requires HTTPS in Safari.';
-    return;
-  }
-
-  try {
-    iosStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false
-    });
-  } catch (e) {
-    note.textContent = 'Could not open iPhone camera. Allow camera access in Safari settings and try again.';
-    return;
-  }
-
-  camBg.srcObject = iosStream;
-  try { await camBg.play(); } catch (_) {}
-
-  iosCameraActive = true;
-  iosHasGyro = false;
-  iosPlaced = false;
-  document.body.classList.add('ios-ar-active');
-  ov.style.display = 'block';
-  statusEl.style.display = 'block';
-  statusEl.textContent = 'Point at the table — tap screen to reposition Ghost.';
-  setTimeout(() => { if (iosCameraActive) statusEl.style.display = 'none'; }, 3000);
-
-  controls.enabled = false;
-  previewFloor.visible = false;
-  camera.position.set(0, 0, 0);
-  camera.quaternion.identity();
-  modelRoot.position.set(0, -0.15, -0.60);
-  modelRoot.rotation.set(0, 0, 0);
-  modelRoot.visible = true;
-
-  // Ensure S3 FBX Salute animation is actively running
-  if (!mixer && activeClip) {
-    mixer = startClipOnMixer(loadedFbx, activeClip);
-  }
-
-  onResize();
-  window.addEventListener('deviceorientation', onIosDeviceOrientation);
-  renderer.domElement.addEventListener('pointerdown', onIosStageTap);
-};
-
-$('exit').onclick = () => {
-  if (xrSession) xrSession.end();
-  if (iosCameraActive) stopIosCameraAR();
-};
+$('exit').onclick = () => { if (xrSession) xrSession.end(); };
 
 function onResize() {
   if (xrSession) return;
-  const w = iosCameraActive ? window.innerWidth : stage.clientWidth;
-  const h = Math.max(iosCameraActive ? window.innerHeight : stage.clientHeight, 1);
+  const w = stage.clientWidth;
+  const h = Math.max(stage.clientHeight, 1);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
