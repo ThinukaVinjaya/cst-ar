@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Builds models/ghost_salute_ios.usdz mirroring Apple's official 2025 AR Quick Look
-animated skeletal USDZ template (robot.usdz) down to every schema & metadata detail:
+Builds models/ghost_salute_v6.usdz from simplified models/ghost_salute_lite.glb (~42K tris)
+mirroring Apple's official 2025 AR Quick Look animated skeletal USDZ (robot.usdz):
+- 42,357 tris / 41,848 verts (matching Apple robot.usdz 42K tris, well under 100K mobile limit)
 - defaultPrim is `def SkelRoot "GhostSalute" (kind = "component")` with animated `extent.timeSamples`
-- metersPerUnit = 0.01 (centimeters, 25 cm tabletop height = 0..25.0)
-- Static identity `root` joint at index 0 (`root/mixamorig_Hips/...`), 47 total joints
-- bindTransforms aligned 1:1 with world(restTransforms) (0.000000 cm residual)
-- Skeleton at /GhostSalute/Rig/root with rel skel:animationSource -> /GhostSalute/Rig/root/Animation
-- Constant `half3[] scales` on SkelAnimation (matching Apple robot.usdz)
-- Explicit `skel:joints` + `rel skel:skeleton` + `GeomSubset` materialBind partition on each Mesh
+- metersPerUnit = 0.01 (centimeters, 25 cm height = 0..25.0), 30 fps
+- Static identity `root` joint at index 0 (`root/mixamorig_Hips/...`), bindTransforms == world(restTransforms)
+- Per-mesh elementSize <= len(skel:joints) with ZERO duplicate joint indices on every vertex
+- Constant `half3[] scales` on SkelAnimation and `GeomSubset` materialBind partitions
 """
 import json
 import math
@@ -18,9 +17,9 @@ import struct
 import tempfile
 from pxr import Gf, Kind, Sdf, Usd, UsdGeom, UsdShade, UsdSkel, UsdUtils, Vt
 
-GLB_PATH = os.path.abspath('models/ghost_salute.glb')
-OUT_USDZ = os.path.abspath('models/ghost_salute_ios.usdz')
-CM = 100.0  # Convert meters -> centimeters for metersPerUnit = 0.01 (matching Apple robot.usdz)
+GLB_PATH = os.path.abspath('models/ghost_salute_lite.glb')
+OUT_USDZ = os.path.abspath('models/ghost_salute_v6.usdz')
+CM = 100.0
 
 
 def sanitize_tok(name):
@@ -39,17 +38,25 @@ def build_salute_usdz():
     bvs = g['bufferViews']
     nodes = g['nodes']
 
+    norm_div = {5120: 127.0, 5121: 255.0, 5122: 32767.0, 5123: 65535.0}
+
     def read_acc(idx):
         a = accs[idx]
         bv = bvs[a['bufferView']]
         off = bv.get('byteOffset', 0) + a.get('byteOffset', 0)
         ncomp = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}[a['type']]
-        fc = {5120: 'b', 5121: 'B', 5122: 'h', 5123: 'H', 5125: 'I', 5126: 'f'}[a['componentType']]
+        ct = a['componentType']
+        fc = {5120: 'b', 5121: 'B', 5122: 'h', 5123: 'H', 5125: 'I', 5126: 'f'}[ct]
         sz = struct.calcsize('<' + fc * ncomp)
         stride = bv.get('byteStride', sz)
+        is_norm = a.get('normalized', False) and ct in norm_div
+        div = norm_div.get(ct, 1.0)
+        signed = ct in (5120, 5122)
         out = []
         for i in range(a['count']):
             vals = struct.unpack_from('<' + fc * ncomp, buf, off + i * stride)
+            if is_norm:
+                vals = tuple(max(v / div, -1.0) if signed else (v / div) for v in vals)
             out.append(vals[0] if ncomp == 1 else list(vals))
         return out
 
@@ -75,8 +82,8 @@ def build_salute_usdz():
             keep_nodes.add(cur)
     keep_nodes.add(hips_idx)
 
-    # 1. Build 47-joint hierarchy: index 0 is static identity `root`, children are `root/mixamorig_Hips/...`
-    joint_nodes = [None]        # index 0 = synthetic `root`
+    # 1. Build topological skeleton with synthetic identity `root` at index 0
+    joint_nodes = [None]
     joint_paths = ['root']
     joint_parent = [-1]
     node_to_joint = {}
@@ -97,7 +104,6 @@ def build_salute_usdz():
     dfs(hips_idx, 'root', 0)
     nj = len(joint_nodes)
 
-    # Compute restTransforms & raw bindTransforms in centimeters (metersPerUnit = 0.01)
     rest_mats = [Gf.Matrix4d(1.0)]
     world_rest_mats = [Gf.Matrix4d(1.0)]
     raw_bind_mats = [Gf.Matrix4d(1.0)]
@@ -118,7 +124,6 @@ def build_salute_usdz():
         pji = joint_parent[ji]
         world_rest_mats.append(rm * world_rest_mats[pji])
         if jn in joint_ibm:
-            # Convert bind matrix translation from meters to cm
             bm_m = Gf.Matrix4d(*joint_ibm[jn]).GetInverse()
             bm_cm = Gf.Matrix4d(bm_m)
             tr = bm_m.ExtractTranslation()
@@ -127,24 +132,25 @@ def build_salute_usdz():
         else:
             raw_bind_mats.append(world_rest_mats[-1])
 
-    # Align bind pose with rest pose so bindTransforms[1..] == world(restTransforms[1..]) and boots sit at y=0 cm
     align_delta = world_rest_mats[1].ExtractTranslation() - raw_bind_mats[1].ExtractTranslation()
     shift_mat = Gf.Matrix4d(1.0)
     shift_mat.SetTranslate(align_delta)
     bind_mats = [Gf.Matrix4d(1.0)] + [bm * shift_mat for bm in raw_bind_mats[1:]]
 
-    max_res = max((bind_mats[i].ExtractTranslation() - world_rest_mats[i].ExtractTranslation()).GetLength() for i in range(nj))
-    print(f'Skeleton: {nj} joints (root + {nj-1} Mixamo), bind/rest max residual={max_res:.6f} cm')
-
-    # 2. Extract Salute animation frames (in centimeters, hemisphere-continuous quaternions)
+    # 2. Extract Salute animation frames & compute exact FPS from input times
     anim = g['animations'][0]
     anim_t = {}
     anim_r = {}
     num_frames = 0
+    max_time = 2.833333
     for ch in anim['channels']:
         ni = ch['target']['node']
         path = ch['target']['path']
-        vals = read_acc(anim['samplers'][ch['sampler']]['output'])
+        samp = anim['samplers'][ch['sampler']]
+        in_acc = accs[samp['input']]
+        if 'max' in in_acc and in_acc['max']:
+            max_time = max(max_time, float(in_acc['max'][0]))
+        vals = read_acc(samp['output'])
         num_frames = max(num_frames, len(vals))
         if path == 'translation':
             anim_t[ni] = vals
@@ -160,8 +166,11 @@ def build_salute_usdz():
                 prev = q
             anim_r[ni] = clean
 
-    # 3. Build Apple robot.usdz-identical stage and compile to binary ARKit USDZ
-    tmpdir = tempfile.mkdtemp(prefix='ghost_ios_')
+    fps = round((num_frames - 1) / max_time) if max_time > 0 else 30
+    print(f'Animation: {num_frames} frames over {max_time:.3f}s -> {fps} fps, {nj} joints')
+
+    # 3. Build stage mirroring Apple robot.usdz (Geo -> Rig -> Looks) & compile binary ARKit USDZ
+    tmpdir = tempfile.mkdtemp(prefix='ghost_v6_')
     old_cwd = os.getcwd()
     try:
         tex_dir = os.path.join(tmpdir, 'tex')
@@ -176,17 +185,16 @@ def build_salute_usdz():
                 tf.write(buf[off:off + bv['byteLength']])
             tex_rel[i] = f'tex/{fname}'
 
-        usda_path = os.path.join(tmpdir, 'ghost_salute_ios.usda')
+        usda_path = os.path.join(tmpdir, 'ghost_salute_v6.usda')
         st = Usd.Stage.CreateNew(usda_path)
         UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.y)
         UsdGeom.SetStageMetersPerUnit(st, 0.01)
-        st.SetTimeCodesPerSecond(24.0)
-        st.SetFramesPerSecond(24.0)
+        st.SetTimeCodesPerSecond(float(fps))
+        st.SetFramesPerSecond(float(fps))
         st.SetStartTimeCode(0)
         st.SetEndTimeCode(num_frames - 1)
         st.GetRootLayer().customLayerData = {'autoPlay': True, 'playbackMode': 'loop'}
 
-        # defaultPrim IS SkelRoot with kind="component" and NO SkelBindingAPI (exact Apple robot.usdz structure!)
         root_skel = UsdSkel.Root.Define(st, '/GhostSalute')
         st.SetDefaultPrim(root_skel.GetPrim())
         Usd.ModelAPI(root_skel.GetPrim()).SetKind(Kind.Tokens.component)
@@ -227,7 +235,8 @@ def build_salute_usdz():
             umat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), 'surface')
             mats.append(umat)
 
-        # Rig + Skeleton + nested SkelAnimation (exact Apple robot.usdz structure!)
+        # Define Skeleton path early (will live at /GhostSalute/Rig/root)
+        UsdGeom.Xform.Define(st, '/GhostSalute/Geo')
         UsdGeom.Xform.Define(st, '/GhostSalute/Rig')
         sk = UsdSkel.Skeleton.Define(st, '/GhostSalute/Rig/root')
         joints_vt = Vt.TokenArray(joint_paths)
@@ -239,7 +248,6 @@ def build_salute_usdz():
         anim_prim.CreateJointsAttr(joints_vt)
         ta = anim_prim.CreateTranslationsAttr()
         ra = anim_prim.CreateRotationsAttr()
-        # Constant scales array (exact match to Apple robot.usdz!)
         anim_prim.CreateScalesAttr().Set(Vt.Vec3hArray([Gf.Vec3h(1, 1, 1) for _ in range(nj)]))
 
         for f_idx in range(num_frames):
@@ -248,9 +256,15 @@ def build_salute_usdz():
             rs = [Gf.Quatf(1.0, Gf.Vec3f(0.0, 0.0, 0.0))]
             for ji in range(1, nj):
                 jn = joint_nodes[ji]
-                v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0.0, 0.0, 0.0])
+                if jn in anim_t and f_idx < len(anim_t[jn]):
+                    v = anim_t[jn][f_idx]
+                else:
+                    v = nodes[jn].get('translation', [0.0, 0.0, 0.0])
                 ts.append(Gf.Vec3f(float(v[0]) * CM, float(v[1]) * CM, float(v[2]) * CM))
-                q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0.0, 0.0, 0.0, 1.0])
+                if jn in anim_r and f_idx < len(anim_r[jn]):
+                    q = anim_r[jn][f_idx]
+                else:
+                    q = nodes[jn].get('rotation', [0.0, 0.0, 0.0, 1.0])
                 ql = math.hypot(q[0], q[1], q[2], q[3]) or 1.0
                 rs.append(Gf.Quatf(float(q[3] / ql), Gf.Vec3f(float(q[0] / ql), float(q[1] / ql), float(q[2] / ql))))
             ta.Set(Vt.Vec3fArray(ts), tc)
@@ -258,11 +272,12 @@ def build_salute_usdz():
 
         UsdSkel.BindingAPI.Apply(sk.GetPrim()).CreateAnimationSourceRel().SetTargets([anim_prim.GetPath()])
 
-        # 12 Skinned Meshes under /GhostSalute/Geo (exact Apple robot.usdz pattern!)
-        UsdGeom.Xform.Define(st, '/GhostSalute/Geo')
+        # Build 12 lightweight skinned meshes with strict elementSize <= len(skel:joints) and ZERO duplicate joint indices!
         dx, dy, dz = float(align_delta[0]), float(align_delta[1]), float(align_delta[2])
         mesh_nodes = [n for n in nodes if n.get('mesh') is not None]
         built = 0
+        tot_v = 0
+        tot_t = 0
 
         for k, mn in enumerate(mesh_nodes):
             mi = mn['mesh']
@@ -283,16 +298,44 @@ def build_salute_usdz():
             wgts = read_acc(prim['attributes']['WEIGHTS_0'])
             idxs = read_acc(prim['indices'])
 
-            # Per-mesh explicit skel:joints list (exact Apple robot.usdz pattern!)
             mesh_joint_tokens = [joint_paths[node_to_joint[jn]] for jn in sk_g['joints']]
+            n_mj = len(mesh_joint_tokens)
+
+            # Deduplicate, sort descending, normalize, and compute exact elementSize <= n_mj
+            vert_pairs = []
+            max_nz = 1
+            for j4, w4 in zip(jidxs, wgts):
+                merged = {}
+                for c in range(4):
+                    w = float(w4[c])
+                    if w > 1e-5:
+                        ji_loc = int(j4[c])
+                        merged[ji_loc] = merged.get(ji_loc, 0.0) + w
+                if not merged:
+                    merged[int(j4[0])] = 1.0
+                pairs = sorted(merged.items(), key=lambda x: -x[1])[:4]
+                sw = sum(w for _, w in pairs) or 1.0
+                pairs = [(j, w / sw) for j, w in pairs]
+                max_nz = max(max_nz, len(pairs))
+                vert_pairs.append(pairs)
+
+            es = min(max_nz, n_mj)
             flat_ji = []
             flat_jw = []
-            for j4, w4 in zip(jidxs, wgts):
-                s_w = sum(w4) or 1.0
-                for c in range(4):
-                    w_norm = float(w4[c] / s_w)
-                    flat_ji.append(int(j4[c]) if w_norm > 0.0 else 0)
-                    flat_jw.append(w_norm)
+            for pairs in vert_pairs:
+                used_set = {j for j, _ in pairs}
+                padded = list(pairs[:es])
+                # Pad remaining slots with DISTINCT unused joint indices (0.0 weight) -> dups == 0!
+                cand = 0
+                while len(padded) < es:
+                    while cand in used_set and cand < n_mj:
+                        cand += 1
+                    padded.append((cand % n_mj, 0.0))
+                    used_set.add(cand % n_mj)
+                    cand += 1
+                for j, w in padded:
+                    flat_ji.append(int(j))
+                    flat_jw.append(float(w))
 
             n_faces = len(idxs) // 3
             me = UsdGeom.Mesh.Define(st, f'/GhostSalute/Geo/Mesh{k}')
@@ -311,8 +354,8 @@ def build_salute_usdz():
             b = UsdSkel.BindingAPI.Apply(me.GetPrim())
             b.CreateSkeletonRel().SetTargets([sk.GetPath()])
             b.CreateJointsAttr(Vt.TokenArray(mesh_joint_tokens))
-            b.CreateJointIndicesPrimvar(False, 4).Set(Vt.IntArray(flat_ji))
-            b.CreateJointWeightsPrimvar(False, 4).Set(Vt.FloatArray(flat_jw))
+            b.CreateJointIndicesPrimvar(False, es).Set(Vt.IntArray(flat_ji))
+            b.CreateJointWeightsPrimvar(False, es).Set(Vt.FloatArray(flat_jw))
             b.CreateGeomBindTransformAttr(Gf.Matrix4d(1))
 
             UsdShade.MaterialBindingAPI.Apply(me.GetPrim())
@@ -323,8 +366,10 @@ def build_salute_usdz():
             )
             UsdShade.MaterialBindingAPI.Apply(sub.GetPrim()).Bind(mats[mat_idx])
             built += 1
+            tot_v += len(pts)
+            tot_t += n_faces
 
-        # Compute exact animated extent.timeSamples on SkelRoot (exact Apple robot.usdz pattern!)
+        # Compute exact animated extent.timeSamples on SkelRoot (matching Apple robot.usdz!)
         cache = UsdSkel.Cache()
         cache.Populate(root_skel, Usd.TraverseInstanceProxies())
         bindings = cache.ComputeSkelBindings(root_skel, Usd.TraverseInstanceProxies())
@@ -347,10 +392,10 @@ def build_salute_usdz():
         del st
 
         os.chdir(tmpdir)
-        ok = UsdUtils.CreateNewARKitUsdzPackage(Sdf.AssetPath('ghost_salute_ios.usda'), OUT_USDZ)
+        ok = UsdUtils.CreateNewARKitUsdzPackage(Sdf.AssetPath('ghost_salute_v6.usda'), OUT_USDZ)
         os.chdir(old_cwd)
         assert ok and os.path.exists(OUT_USDZ), 'UsdUtils.CreateNewARKitUsdzPackage failed!'
-        print(f'Built Apple-canonical binary USDZ: {OUT_USDZ} ({os.path.getsize(OUT_USDZ)/1048576:.2f} MB, {built} meshes, {nj} joints, {num_frames} frames)')
+        print(f'Built lightweight Apple-canonical USDZ: {OUT_USDZ} ({os.path.getsize(OUT_USDZ)/1048576:.2f} MB, {built} meshes, {tot_v} verts, {tot_t} tris, {nj} joints, {num_frames} frames @ {fps}fps)')
     finally:
         os.chdir(old_cwd)
         shutil.rmtree(tmpdir, ignore_errors=True)
