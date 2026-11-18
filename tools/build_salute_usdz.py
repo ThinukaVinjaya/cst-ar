@@ -57,7 +57,6 @@ def mm_col(A, B):
     return [sum(A[k*4+r]*B[c*4+k] for k in range(4)) for c in range(4) for r in range(4)]
 
 def inv_mat4_col(M):
-    # Invert 4x4 column-major matrix via Gauss-Jordan (work in row-major then transpose back)
     A = [[M[c*4+r] for c in range(4)] + [1.0 if r==c else 0.0 for c in range(4)] for r in range(4)]
     for i in range(4):
         piv = max(range(i, 4), key=lambda r: abs(A[r][i]))
@@ -73,7 +72,6 @@ def inv_mat4_col(M):
     return [A[r][4+c] for c in range(4) for r in range(4)]
 
 def fmt_mat4_usd(m):
-    # glTF col-major 16-float list == USD row-major 4x4 row-vector matrix element-for-element!
     return '( ' + ', '.join(
         '(' + ', '.join(f'{m[r*4+c]:.6f}' for c in range(4)) + ')'
         for r in range(4)
@@ -108,7 +106,7 @@ def build_salute_usdz():
             out.append(vals[0] if ncomp == 1 else list(vals))
         return out
 
-    # 1. Collect unified skeleton in topological order starting at mixamorig:Hips (Node 24)
+    # 1. Unified skeleton in topological parent-before-child order starting at mixamorig:Hips
     hips_idx = next(i for i, n in enumerate(nodes) if n.get('name') == 'mixamorig:Hips')
     joint_nodes = []
     joint_paths = []
@@ -128,9 +126,7 @@ def build_salute_usdz():
 
     dfs(hips_idx, '', -1)
     nj = len(joint_nodes)
-    print(f'Unified skeleton: {nj} joints')
 
-    # Gather IBMs across all skins
     joint_ibm = {}
     for sk in g['skins']:
         ibms = read_acc(sk['inverseBindMatrices'])
@@ -138,7 +134,6 @@ def build_salute_usdz():
             if jn not in joint_ibm:
                 joint_ibm[jn] = ibms[ji_local]
 
-    # Compute restTransforms & bindTransforms
     rest_mats = []
     bind_mats = []
     for ji, jn in enumerate(joint_nodes):
@@ -165,9 +160,8 @@ def build_salute_usdz():
             anim_t[ni] = vals
         elif path == 'rotation':
             anim_r[ni] = vals
-    print(f'Animation frames: {num_frames}')
 
-    # 3. Extract embedded textures
+    # 3. Extract textures
     tex_files = {}
     for i, img in enumerate(g.get('images', [])):
         bv = bvs[img['bufferView']]
@@ -176,7 +170,7 @@ def build_salute_usdz():
         fname = f'textures/t{i}.{ext}'
         tex_files[i] = (fname, buf[off:off + bv['byteLength']])
 
-    # 4. Build USDA text
+    # 4. Build Apple RealityKit-compliant UsdSkel USDA
     L = []
     L.append('#usda 1.0')
     L.append('(')
@@ -185,6 +179,7 @@ def build_salute_usdz():
     L.append('    upAxis = "Y"')
     L.append('    startTimeCode = 0')
     L.append(f'    endTimeCode = {num_frames - 1}')
+    L.append('    framesPerSecond = 24')
     L.append('    timeCodesPerSecond = 24')
     L.append('    customLayerData = {')
     L.append('        bool autoPlay = 1')
@@ -209,7 +204,6 @@ def build_salute_usdz():
         bc = pbr.get('baseColorFactor', [1.0, 1.0, 1.0, 1.0])
         rough = pbr.get('roughnessFactor', 0.8)
         metal = pbr.get('metallicFactor', 0.05)
-        opacity = bc[3] if len(bc) > 3 else 1.0
         tf = None
         if 'baseColorTexture' in pbr:
             ti = pbr['baseColorTexture']['index']
@@ -228,8 +222,6 @@ def build_salute_usdz():
             L.append(f'                color3f inputs:diffuseColor = ({bc[0]:.3f}, {bc[1]:.3f}, {bc[2]:.3f})')
         L.append(f'                float inputs:roughness = {rough:.3f}')
         L.append(f'                float inputs:metallic = {metal:.3f}')
-        if opacity < 0.99:
-            L.append(f'                float inputs:opacity = {opacity:.3f}')
         L.append('                token outputs:surface')
         L.append('            }')
         if tf:
@@ -251,39 +243,17 @@ def build_salute_usdz():
     L.append('    }')
     L.append('')
 
-    # Shared UsdSkel Animation
     joints_tok_str = ', '.join(f'"{p}"' for p in joint_paths)
-    L.append('    def SkelAnimation "Anim"')
-    L.append('    {')
-    L.append(f'        uniform token[] joints = [{joints_tok_str}]')
-    L.append('        float3[] translations.timeSamples = {')
-    for f_idx in range(num_frames):
-        ts = []
-        for jn in joint_nodes:
-            v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0, 0, 0])
-            ts.append(f'({v[0]:.5f}, {v[1]:.5f}, {v[2]:.5f})')
-        L.append(f'            {f_idx}: [{", ".join(ts)}],')
-    L.append('        }')
-    L.append('        quatf[] rotations.timeSamples = {')
-    for f_idx in range(num_frames):
-        rs = []
-        for jn in joint_nodes:
-            q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0, 0, 0, 1])
-            # glTF (x,y,z,w) -> USD quatf (w,x,y,z)
-            rs.append(f'({q[3]:.5f}, {q[0]:.5f}, {q[1]:.5f}, {q[2]:.5f})')
-        L.append(f'            {f_idx}: [{", ".join(rs)}],')
-    L.append('        }')
     ones = ', '.join('(1, 1, 1)' for _ in range(nj))
-    L.append(f'        half3[] scales = [{ones}]')
-    L.append('    }')
-    L.append('')
 
-    # SkelRoot + Skeleton + 13 Skinned Meshes
+    # SkelRoot containing Skeleton + nested SkelAnimation + 12 Skinned Meshes
     L.append('    def SkelRoot "Rig" (')
     L.append('        prepend apiSchemas = ["SkelBindingAPI"]')
     L.append('    )')
     L.append('    {')
     L.append('        rel skel:skeleton = </World/Rig/Skel>')
+    L.append('        rel skel:animationSource = </World/Rig/Skel/Anim>')
+    L.append('')
     L.append('        def Skeleton "Skel" (')
     L.append('            prepend apiSchemas = ["SkelBindingAPI"]')
     L.append('        )')
@@ -291,10 +261,34 @@ def build_salute_usdz():
     L.append(f'            uniform token[] joints = [{joints_tok_str}]')
     L.append('            uniform matrix4d[] bindTransforms = [' + ', '.join(fmt_mat4_usd(m) for m in bind_mats) + ']')
     L.append('            uniform matrix4d[] restTransforms = [' + ', '.join(fmt_mat4_usd(m) for m in rest_mats) + ']')
-    L.append('            rel skel:animationSource = </World/Anim>')
+    L.append('            rel skel:animationSource = </World/Rig/Skel/Anim>')
+    L.append('')
+    L.append('            def SkelAnimation "Anim"')
+    L.append('            {')
+    L.append(f'                uniform token[] joints = [{joints_tok_str}]')
+    L.append('                float3[] translations.timeSamples = {')
+    for f_idx in range(num_frames):
+        ts = []
+        for jn in joint_nodes:
+            v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0, 0, 0])
+            ts.append(f'({v[0]:.5f}, {v[1]:.5f}, {v[2]:.5f})')
+        L.append(f'                    {f_idx}: [{", ".join(ts)}],')
+    L.append('                }')
+    L.append('                quatf[] rotations.timeSamples = {')
+    for f_idx in range(num_frames):
+        rs = []
+        for jn in joint_nodes:
+            q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0, 0, 0, 1])
+            rs.append(f'({q[3]:.5f}, {q[0]:.5f}, {q[1]:.5f}, {q[2]:.5f})')
+        L.append(f'                    {f_idx}: [{", ".join(rs)}],')
+    L.append('                }')
+    L.append('                half3[] scales.timeSamples = {')
+    for f_idx in range(num_frames):
+        L.append(f'                    {f_idx}: [{ones}],')
+    L.append('                }')
+    L.append('            }')
     L.append('        }')
 
-    # Write each skinned mesh node
     mesh_nodes = [n for n in nodes if n.get('mesh') is not None]
     for k, mn in enumerate(mesh_nodes):
         mi = mn['mesh']
@@ -303,7 +297,6 @@ def build_salute_usdz():
         prim = g['meshes'][mi]['primitives'][0]
         mat_idx = prim.get('material', 0)
 
-        # Skip completely transparent helper mesh (Mat 10 opacity == 0)
         pbr_m = g['materials'][mat_idx].get('pbrMetallicRoughness', {})
         bc_m = pbr_m.get('baseColorFactor', [1, 1, 1, 1])
         if len(bc_m) > 3 and bc_m[3] == 0:
@@ -316,7 +309,6 @@ def build_salute_usdz():
         wgts = read_acc(prim['attributes']['WEIGHTS_0'])
         idxs = read_acc(prim['indices'])
 
-        # Remap skin-local joint indices -> unified skeleton indices
         remap = [node_to_joint[jn] for jn in sk['joints']]
         flat_ji = []
         flat_jw = []
@@ -324,7 +316,7 @@ def build_salute_usdz():
             s = sum(w4) or 1.0
             for c in range(4):
                 flat_ji.append(str(remap[int(j4[c])]))
-                flat_jw.append(f'{w4[c]/s:.4f}')
+                flat_jw.append(f'{w4[c]/s:.3f}')
 
         n_faces = len(idxs) // 3
         L.append(f'        def Mesh "Mesh{k}" (')
@@ -341,7 +333,7 @@ def build_salute_usdz():
         L.append('            normal3f[] normals = [' + ', '.join(f'({n[0]:.3f}, {n[1]:.3f}, {n[2]:.3f})' for n in nrms) + '] (')
         L.append('                interpolation = "vertex"')
         L.append('            )')
-        L.append('            texCoord2f[] primvars:st = [' + ', '.join(f'({u[0]:.4f}, {1.0 - u[1]:.4f})' for u in uvs) + '] (')
+        L.append('            texCoord2f[] primvars:st = [' + ', '.join(f'({u[0]:.3f}, {1.0 - u[1]:.3f})' for u in uvs) + '] (')
         L.append('                interpolation = "vertex"')
         L.append('            )')
         L.append('            int[] primvars:skel:jointIndices = [' + ', '.join(flat_ji) + '] (')
@@ -358,7 +350,7 @@ def build_salute_usdz():
     L.append('}')
 
     usda_bytes = '\n'.join(L).encode('utf-8')
-    print(f'Generated UsdSkel USDA: {len(usda_bytes)/1048576:.2f} MB')
+    print(f'Generated UsdSkel USDA: {len(usda_bytes)/1048576:.2f} MB ({nj} joints, {num_frames} frames)')
 
     w = ArkitUsdzWriter(OUT_USDZ)
     w.add_file('ghost_salute.usda', usda_bytes)

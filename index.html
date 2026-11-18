@@ -51,7 +51,7 @@ header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
     <button id="retry">Retry</button>
   </div>
   <button id="xr" class="ar-cta" disabled>Loading Ghost…</button>
-  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute.usdz#allowsContentScaling=0">
+  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute.usdz?v=2#allowsContentScaling=0">
     <img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
     Open AR camera
   </a>
@@ -345,6 +345,7 @@ xrBtn.onclick = async () => {
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(xrSession);
   refSpace = renderer.xr.getReferenceSpace();
+  lastTick = performance.now();
 
   xrSession.requestReferenceSpace('viewer')
     .then(sp => xrSession.requestHitTestSource({ space: sp }))
@@ -382,15 +383,22 @@ function onResize() {
 window.addEventListener('resize', onResize);
 
 // ---- Main Render & Animation Loop (Preview + WebXR AR) ----
-const clock = new THREE.Clock();
+let lastTick = performance.now();
 const q = new THREE.Quaternion();
 const upVec = new THREE.Vector3();
 const hitMat = new THREE.Matrix4();
 const lastHitPos = new THREE.Vector3();
 
 renderer.setAnimationLoop((t, frame) => {
-  const dt = Math.min(clock.getDelta(), 0.1);
-  if (mixer) mixer.update(dt);
+  const now = performance.now();
+  const dt = Math.min(Math.max((now - lastTick) / 1000, 0), 0.1);
+  lastTick = now;
+  if (mixer) {
+    mixer.update(dt);
+    if (loadedFbx) {
+      loadedFbx.updateMatrixWorld(true);
+    }
+  }
 
   if (xrSession && frame) {
     if (!xrPlaced && hitSource) {
