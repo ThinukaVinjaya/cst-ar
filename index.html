@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>CST LAN Challenge – Ghost AR</title>
+<title>CST LAN Challenge – Ghost Salute AR</title>
 <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"}}</script>
 <style>
@@ -16,12 +16,6 @@ h1{margin:0;font-size:2.3rem;line-height:1}
 header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
 #viewer-container{position:relative;flex:1;min-height:0;width:100%;display:flex}
 model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);--poster-color:transparent}
-#loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:rgba(20,23,15,.82);z-index:4}
-#loader.hidden{display:none}
-.bar-wrap{width:min(260px,78%);height:8px;background:#262c1c;border:1px solid #3a4128;border-radius:4px;overflow:hidden}
-#bar{height:100%;width:0%;background:var(--flare);transition:width .15s linear}
-#load-text{font-size:1.15rem;color:var(--ink);max-width:340px}
-#retry{display:none;padding:10px 22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.15rem;font-weight:700;border-radius:4px;cursor:pointer}
 #ar{position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:3}
 #ar:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 #xr{display:none;position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:5}
@@ -36,16 +30,11 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
 <body>
 <header>
   <h1>CST LAN Challenge</h1>
-  <p>Tap Open AR camera, point at the table, and walk around Ghost.</p>
+  <p>Tap Open AR camera, scan the table, and walk around Ghost.</p>
 </header>
 <div id="viewer-container">
-  <div id="loader">
-    <div id="load-text">Loading Ghost Salute…</div>
-    <div class="bar-wrap"><div id="bar"></div></div>
-    <button id="retry">Retry</button>
-  </div>
-  <model-viewer id="mv" alt="Ghost Salute AR" autoplay
-    camera-controls camera-orbit="0deg 75deg 0.75m" shadow-intensity="1" interaction-prompt="none"
+  <model-viewer id="mv" src="models/ghost_salute.glb" alt="Ghost Salute AR" autoplay animation-name="Salute"
+    camera-controls camera-orbit="0deg 75deg 0.65m" shadow-intensity="1" interaction-prompt="none"
     ar ar-modes="quick-look scene-viewer webxr" ar-placement="floor" ar-scale="fixed" loading="eager">
     <button slot="ar-button" id="ar">Open AR camera</button>
   </model-viewer>
@@ -55,20 +44,15 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
   <div id="status"></div>
   <button id="exit">Close</button>
 </div>
-<p id="note">Loading model from S3. Allow camera access when opening AR.</p>
+<p id="note">Allow camera access. Scan the table so Ghost locks in place, then walk 360° around him.</p>
 
 <script type="module">
 import * as THREE from 'three';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const MODEL_URL = 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx';
-const IOS_USDZ_URL = '';       // Optional: paste an S3 .usdz URL here if you also upload a pre-baked animated USDZ for iOS
-const TARGET_HEIGHT = 0.25;    // 25 cm tabletop height (set to 1.8 for life-size)
-
+const MODEL_SRC = 'models/ghost_salute.glb';
 const $ = id => document.getElementById(id);
 const mv = $('mv'), xrBtn = $('xr'), note = $('note');
-const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBtn = $('retry');
 
 mv.addEventListener('load', () => {
   if (!hasWebXR && !mv.canActivateAR) {
@@ -82,272 +66,30 @@ const hasWebXR = !!(navigator.xr && await Promise.race([
   new Promise(r => setTimeout(() => r(false), 2000))
 ]));
 
+let gltf = null;
+let preload = null;
+
 if (hasWebXR) {
   mv.removeAttribute('ar');
   xrBtn.style.display = 'block';
   xrBtn.disabled = true;
   xrBtn.textContent = 'Loading Ghost…';
-  note.textContent = 'Tap Open AR camera, scan the table, and walk around Ghost.';
-} else {
-  note.textContent = 'Tap Open AR camera. Scan the table to lock Ghost in place, then walk around him.';
-}
+  note.textContent = 'Tap Open AR camera, point at the table to scan, then walk around Ghost.';
 
-// Convert FBX MeshPhong/Lambert materials to PBR MeshStandardMaterial (required for clean GLB/USDZ export)
-function toStandardMaterial(m) {
-  if (!m) return new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.75 });
-  if (m.isMeshStandardMaterial) {
-    if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
-    return m;
-  }
-  const std = new THREE.MeshStandardMaterial({
-    name: m.name || '',
-    color: m.color ? m.color.clone() : new THREE.Color(0xffffff),
-    map: m.map || null,
-    normalMap: m.normalMap || null,
-    bumpMap: m.bumpMap || null,
-    emissive: m.emissive ? m.emissive.clone() : new THREE.Color(0x000000),
-    emissiveMap: m.emissiveMap || null,
-    roughness: 0.72,
-    metalness: 0.12,
-    transparent: !!(m.transparent && m.opacity < 0.99),
-    opacity: m.opacity === 0 ? 1 : (m.opacity ?? 1),
-    alphaTest: m.alphaTest || 0,
-    side: m.side ?? THREE.FrontSide
-  });
-  if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
-  if (std.emissiveMap) std.emissiveMap.colorSpace = THREE.SRGBColorSpace;
-  return std;
-}
-
-// Wait for embedded FBX blob-URL textures to decode before exporting to GLB
-async function waitForAndCleanTextures(root) {
-  const promises = [];
-  const seen = new Set();
-  const texKeys = ['map', 'normalMap', 'bumpMap', 'emissiveMap', 'roughnessMap', 'metalnessMap'];
-
-  root.traverse(o => {
-    if (!o.isMesh) return;
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    mats.forEach(m => {
-      if (!m) return;
-      texKeys.forEach(key => {
-        const tex = m[key];
-        const img = tex && tex.image;
-        if (!img || seen.has(img)) return;
-        seen.add(img);
-        if (img instanceof HTMLImageElement && (!img.complete || img.naturalWidth === 0)) {
-          promises.push(new Promise(res => {
-            const done = () => res();
-            img.addEventListener('load', done, { once: true });
-            img.addEventListener('error', done, { once: true });
-            setTimeout(done, 5000);
-          }));
-        }
-      });
-    });
-  });
-
-  if (promises.length) await Promise.all(promises);
-
-  // Strip any unreadable/empty textures so GLTFExporter never fails on drawImage()
-  root.traverse(o => {
-    if (!o.isMesh) return;
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    mats.forEach(m => {
-      if (!m) return;
-      texKeys.forEach(key => {
-        const tex = m[key];
-        if (!tex) return;
-        const img = tex.image;
-        const okImg = img && (
-          (img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0) ||
-          (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) ||
-          (img instanceof HTMLCanvasElement && img.width > 0) ||
-          (img.width > 0 && img.height > 0 && img.data)
-        );
-        if (!okImg) {
-          m[key] = null;
-          m.needsUpdate = true;
-        }
-      });
-    });
+  preload = new GLTFLoader().loadAsync(MODEL_SRC).then(g => {
+    gltf = g;
+    xrBtn.disabled = false;
+    xrBtn.textContent = 'Open AR camera';
+  }).catch(() => {
+    xrBtn.disabled = false;
+    xrBtn.textContent = 'Open AR camera';
   });
 }
 
-// Compute exact world-space bounding box of an animated SkinnedMesh so boots touch y = 0
-function computeExactSkinnedBox(root) {
-  root.updateMatrixWorld(true);
-  const box = new THREE.Box3();
-  const v = new THREE.Vector3();
-  root.traverse(o => {
-    if (!o.isMesh || !o.geometry) return;
-    const pos = o.geometry.attributes.position;
-    if (!pos || pos.count === 0) return;
-    if (o.isSkinnedMesh && o.skeleton) {
-      try { o.skeleton.update(); } catch (_) {}
-    }
-    const step = Math.max(1, Math.floor(pos.count / 4000));
-    for (let i = 0; i < pos.count; i += step) {
-      try {
-        if (o.isSkinnedMesh && typeof o.getVertexPosition === 'function') {
-          o.getVertexPosition(i, v);
-        } else {
-          v.fromBufferAttribute(pos, i);
-        }
-      } catch (_) {
-        v.fromBufferAttribute(pos, i);
-      }
-      v.applyMatrix4(o.matrixWorld);
-      if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) box.expandByPoint(v);
-    }
-  });
-  return box;
-}
-
-// Fetch FBX as ArrayBuffer with progress, then parse directly with FBXLoader.parse()
-async function fetchArrayBufferWithProgress(url, onProgress) {
-  const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching model`);
-  const total = Number(res.headers.get('content-length')) || 0;
-  if (!res.body) return await res.arrayBuffer();
-
-  const reader = res.body.getReader();
-  const chunks = [];
-  let loaded = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.byteLength;
-    onProgress(loaded, total);
-  }
-  const out = new Uint8Array(loaded);
-  let offset = 0;
-  for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
-  return out.buffer;
-}
-
-let ghostGroup = null;
-let ghostAnims = [];
-let glbBlobUrl = null;
-
-async function loadFBXModel() {
-  loaderEl.classList.remove('hidden');
-  retryBtn.style.display = 'none';
-  bar.style.width = '5%';
-  loadText.textContent = 'Downloading Ghost Salute…';
-  if (hasWebXR) { xrBtn.disabled = true; xrBtn.textContent = 'Loading Ghost…'; }
-
-  try {
-    const buffer = await fetchArrayBufferWithProgress(MODEL_URL, (loaded, total) => {
-      if (total > 0) {
-        const pct = Math.min(88, Math.round((loaded / total) * 88));
-        bar.style.width = pct + '%';
-        loadText.textContent = `Downloading Ghost Salute… ${pct}% (${(loaded / 1048576).toFixed(1)} MB)`;
-      } else {
-        bar.style.width = '45%';
-        loadText.textContent = `Downloading Ghost Salute… ${(loaded / 1048576).toFixed(1)} MB`;
-      }
-    });
-
-    loadText.textContent = 'Parsing 3D model…';
-    bar.style.width = '90%';
-    await new Promise(r => setTimeout(r, 20)); // allow UI repaint
-
-    const fbxLoader = new FBXLoader();
-    const basePath = MODEL_URL.substring(0, MODEL_URL.lastIndexOf('/') + 1);
-    const fbx = fbxLoader.parse(buffer, basePath);
-
-    // Upgrade materials to PBR and prevent skinned mesh frustum culling
-    fbx.traverse(o => {
-      if (!o.isMesh) return;
-      o.frustumCulled = false;
-      o.material = Array.isArray(o.material)
-        ? o.material.map(toStandardMaterial)
-        : toStandardMaterial(o.material);
-    });
-
-    await waitForAndCleanTextures(fbx);
-
-    // Pose on first animation frame so exact feet height is measured accurately
-    ghostAnims = fbx.animations || [];
-    if (ghostAnims.length > 0) {
-      const tmpMixer = new THREE.AnimationMixer(fbx);
-      const clip = ghostAnims.find(a => /salute|mixamo/i.test(a.name)) || ghostAnims[0];
-      tmpMixer.clipAction(clip).play();
-      tmpMixer.update(0.05);
-    }
-
-    // Wrap in root group, scale to TARGET_HEIGHT (25 cm), center X/Z and place boots flush at y = 0
-    ghostGroup = new THREE.Group();
-    ghostGroup.add(fbx);
-
-    const box1 = computeExactSkinnedBox(fbx);
-    const rawH = box1.max.y - box1.min.y;
-    const s = (rawH > 0.001 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 0.0015;
-    fbx.scale.setScalar(s);
-
-    const box2 = computeExactSkinnedBox(fbx);
-    if (!box2.isEmpty()) {
-      const cx = (box2.min.x + box2.max.x) * 0.5;
-      const cz = (box2.min.z + box2.max.z) * 0.5;
-      fbx.position.set(-cx, -box2.min.y, -cz);
-    }
-
-    // Android WebXR is already 100% ready! Enable button immediately.
-    if (hasWebXR) {
-      xrBtn.disabled = false;
-      xrBtn.textContent = 'Open AR camera';
-    }
-
-    // Export in-memory GLB for <model-viewer> (3D preview + iOS AR Quick Look + Android Scene Viewer)
-    loadText.textContent = 'Preparing AR preview…';
-    bar.style.width = '95%';
-    await new Promise(r => setTimeout(r, 20));
-
-    try {
-      const exporter = new GLTFExporter();
-      let glbBuffer;
-      try {
-        glbBuffer = await exporter.parseAsync(ghostGroup, {
-          binary: true,
-          maxTextureSize: 1024,
-          animations: ghostAnims
-        });
-      } catch (animErr) {
-        console.warn('GLTF export with animations failed, retrying without animations:', animErr);
-        glbBuffer = await exporter.parseAsync(ghostGroup, {
-          binary: true,
-          maxTextureSize: 1024
-        });
-      }
-
-      if (glbBlobUrl) URL.revokeObjectURL(glbBlobUrl);
-      glbBlobUrl = URL.createObjectURL(new Blob([glbBuffer], { type: 'model/gltf-binary' }));
-      if (IOS_USDZ_URL) mv.setAttribute('ios-src', IOS_USDZ_URL);
-      mv.src = glbBlobUrl;
-    } catch (expErr) {
-      console.error('GLTFExporter error:', expErr);
-      if (!hasWebXR) throw new Error('Preview conversion failed: ' + (expErr.message || expErr));
-    }
-
-    bar.style.width = '100%';
-    loaderEl.classList.add('hidden');
-  } catch (err) {
-    console.error('Model load error:', err);
-    loadText.textContent = 'Could not load model: ' + (err && err.message ? err.message : 'Network/parse error');
-    bar.style.width = '0%';
-    retryBtn.style.display = 'inline-block';
-    if (hasWebXR && !ghostGroup) xrBtn.textContent = 'Model unavailable';
-  }
-}
-
-retryBtn.onclick = loadFBXModel;
-loadFBXModel();
-
-// ---- Android Chrome WebXR (True 6-DoF ARCore Table Search & World Lock) ----
+// ---- Android Chrome WebXR (True 6-DoF ARCore Table Search & World Anchor) ----
 xrBtn.onclick = async () => {
-  if (!ghostGroup) return;
+  if (!gltf && preload) await preload;
+  if (!gltf) gltf = await new GLTFLoader().loadAsync(MODEL_SRC);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -375,19 +117,18 @@ xrBtn.onclick = async () => {
   reticle.visible = false;
   scene.add(reticle);
 
-  // Add Ghost (hidden until the real table surface is found!)
-  ghostGroup.visible = false;
-  ghostGroup.position.set(0, 0, 0);
-  ghostGroup.rotation.set(0, 0, 0);
-  ghostGroup.scale.set(1, 1, 1);
-  scene.add(ghostGroup);
+  // Ghost is already baked to exact 25 cm tabletop height with boots on y = 0
+  const ghost = gltf.scene;
+  ghost.visible = false;
+  ghost.position.set(0, 0, 0);
+  ghost.rotation.set(0, 0, 0);
+  ghost.scale.set(1, 1, 1);
+  ghost.traverse(o => { if (o.isMesh) o.frustumCulled = false; });
+  scene.add(ghost);
 
-  let mixer = null;
-  if (ghostAnims.length > 0) {
-    mixer = new THREE.AnimationMixer(ghostGroup.children[0]);
-    const clip = ghostAnims.find(a => /salute|mixamo/i.test(a.name)) || ghostAnims[0];
-    mixer.clipAction(clip).play();
-  }
+  const clip = gltf.animations.find(a => a.name === 'Salute') || gltf.animations[0];
+  const mixer = clip ? new THREE.AnimationMixer(ghost) : null;
+  if (mixer) mixer.clipAction(clip).play();
 
   const ov = $('overlay'), status = $('status');
   ov.style.display = 'block';
@@ -455,7 +196,7 @@ xrBtn.onclick = async () => {
           q.set(o.x, o.y, o.z, o.w);
           upVec.set(0, 1, 0).applyQuaternion(q);
 
-          // Confirm horizontal table surface
+          // Confirm real horizontal table plane
           if (upVec.y > 0.90) {
             foundTable = true;
             hitMat.fromArray(pose.transform.matrix);
@@ -470,24 +211,23 @@ xrBtn.onclick = async () => {
             }
             lastHitPos.set(pp.x, pp.y, pp.z);
 
-            // Wait for 6 consecutive stable table frames so the surface height & spot are rock-solid
+            // Lock onto table once 6 consecutive consistent hits confirm a flat surface
             if (stableFrames >= 6) {
               const vp = frame.getViewerPose(refSpace);
-              ghostGroup.position.set(pp.x, pp.y, pp.z);
+              ghost.position.set(pp.x, pp.y, pp.z);
               if (vp) {
                 const p = vp.transform.position;
-                ghostGroup.rotation.set(0, Math.atan2(p.x - pp.x, p.z - pp.z), 0); // Face viewer
+                ghost.rotation.set(0, Math.atan2(p.x - pp.x, p.z - pp.z), 0); // Face user
               }
-              ghostGroup.visible = true;
+              ghost.visible = true;
               reticle.visible = false;
               placed = true;
 
-              // Create persistent ARCore world anchor so model stays locked while walking 360° around it
+              // Persistent ARCore world anchor keeps Ghost locked as user walks 360° around him
               if (typeof hit.createAnchor === 'function') {
                 hit.createAnchor().then(a => { worldAnchor = a; }).catch(() => {});
               }
 
-              // Stop scanning — model will NOT move anymore; user can walk phone 360° around it!
               hitSource.cancel();
               hitSource = null;
 
@@ -502,11 +242,10 @@ xrBtn.onclick = async () => {
           stableFrames = 0;
         }
       } else if (placed && worldAnchor && frame.trackedAnchors && frame.trackedAnchors.has(worldAnchor)) {
-        // Keep Ghost locked to the real-world ARCore anchor as user walks around the table
         const anchorPose = frame.getPose(worldAnchor.anchorSpace, refSpace);
         if (anchorPose) {
           const ap = anchorPose.transform.position;
-          ghostGroup.position.set(ap.x, ap.y, ap.z);
+          ghost.position.set(ap.x, ap.y, ap.z);
         }
       }
     }
