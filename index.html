@@ -2,140 +2,587 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>CST LAN Challenge – Ghost AR</title>
-<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>CST LAN Challenge – Ghost Salute AR</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 <style>
-:root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a}
-*{box-sizing:border-box}
-html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif}
+:root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a;--panel:rgba(20,23,15,.86);--line:#3a4128}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;overflow:hidden}
 body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-header{padding:16px 20px 6px}
-h1{margin:0;font-size:2.3rem;line-height:1}
-header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
-#viewer-container{position:relative;flex:1;min-height:0;width:100%;display:flex}
-model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);--poster-color:transparent}
-#ar{position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:3}
-#ar:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-#xr{display:none;position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:3}
-#xr:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
-#note{margin:0;padding:8px 20px;color:var(--mute);text-align:center;min-height:2.4em;font-size:1.05rem}
-#overlay{display:none;position:fixed;inset:0;pointer-events:none}
-#status{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:rgba(20,23,15,.85);color:var(--ink);padding:10px 16px;font-size:1.2rem;border-radius:4px}
-#exit{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);pointer-events:auto;padding:12px 28px;font:inherit;font-size:1.2rem;background:rgba(20,23,15,.9);color:var(--ink);border:1px solid #3a4128;border-radius:4px}
+header{padding:14px 18px 6px;z-index:2}
+h1{margin:0;font-size:2.1rem;line-height:1;letter-spacing:.02em}
+header p{margin:4px 0 0;color:var(--mute);font-size:1.05rem}
+#stage{position:relative;flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);overflow:hidden}
+#stage canvas{display:block;width:100%;height:100%;touch-action:none}
+#loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:rgba(20,23,15,.72);z-index:4}
+#loader.hidden{display:none}
+.bar-wrap{width:min(260px,78%);height:8px;background:#262c1c;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+#bar{height:100%;width:0%;background:var(--flare);transition:width .15s linear}
+#load-text{font-size:1.15rem;color:var(--ink)}
+#retry{display:none;padding:10px 22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.15rem;font-weight:700;border-radius:4px;cursor:pointer}
+#ar-btn{position:absolute;left:18px;right:18px;bottom:16px;padding:18px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.65rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:5}
+#ar-btn:disabled{opacity:.55;cursor:default}
+#ar-btn:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+#note{margin:0;padding:8px 16px;color:var(--mute);text-align:center;font-size:1rem;z-index:2}
+
+/* Fullscreen Live AR Layers (iOS Safari + Android WebXR) */
+#cam{display:none;position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:10;background:#000}
+body.cam-ar #stage{position:fixed;inset:0;background:transparent;z-index:15}
+body.cam-ar header,body.cam-ar #note,body.cam-ar #ar-btn{display:none}
+#overlay{display:none;position:fixed;inset:0;pointer-events:none;z-index:25}
+#status{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:var(--panel);color:var(--ink);padding:10px 14px;font-size:1.15rem;border-radius:4px;border:1px solid var(--line);transition:opacity .4s}
+#ar-controls{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:14px;right:14px;display:flex;justify-content:center;gap:10px;pointer-events:auto;flex-wrap:wrap}
+.ctrl{padding:11px 18px;font:inherit;font-size:1.1rem;font-weight:700;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.ctrl.primary{background:var(--flare);color:#14170f;border-color:var(--flare)}
 </style>
 </head>
 <body>
 <header>
   <h1>CST LAN Challenge</h1>
-  <p>Point your camera at your table centerpiece or loot box.</p>
+  <p>Point your camera at the table or loot box to place Ghost.</p>
 </header>
-<div id="viewer-container">
-  <model-viewer id="mv" src="models/ghost_animated.glb" ios-src="models/ghost_animated.usdz" alt="Call of Duty 4 Ghost Military AR Perimeter" autoplay animation-name="Action"
-    camera-controls camera-orbit="0deg 70deg 3.5m" shadow-intensity="1" interaction-prompt="none"
-    ar ar-modes="scene-viewer webxr quick-look" ar-placement="floor" ar-scale="fixed" loading="eager"
-    scale="0.131 0.131 0.131">
-    <button slot="ar-button" id="ar">Open AR camera</button>
-  </model-viewer>
-  <button id="xr">Open AR camera</button>
+
+<div id="stage">
+  <div id="loader">
+    <div id="load-text">Loading Ghost Salute…</div>
+    <div class="bar-wrap"><div id="bar"></div></div>
+    <button id="retry">Retry</button>
+  </div>
+  <button id="ar-btn" disabled>Loading model…</button>
 </div>
+
+<p id="note">Drag to inspect in 3D, or tap Open AR camera for Android &amp; iOS AR.</p>
+
+<video id="cam" autoplay playsinline muted></video>
 <div id="overlay">
-  <div id="status"></div>
-  <button id="exit">Close</button>
+  <div id="status">Point at the table</div>
+  <div id="ar-controls">
+    <button class="ctrl" id="scale-down" aria-label="Smaller">−</button>
+    <button class="ctrl" id="scale-up" aria-label="Larger">+</button>
+    <button class="ctrl" id="recenter">Recenter</button>
+    <button class="ctrl primary" id="exit">Close</button>
+  </div>
 </div>
-<p id="note">Ghost, sandbags, ammo crates, claymore, and intel laptop fortify the table around your centerpiece.</p>
-<script>
-const mv=document.getElementById('mv');
-mv.addEventListener('load',()=>{ if(!mv.canActivateAR) document.getElementById('note').textContent='AR is not supported on this phone or browser. On iPhone use Safari; on Android use Chrome.'; });
-</script>
+
 <script type="module">
 import * as THREE from 'three';
-import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
-const $=id=>document.getElementById(id), mv=$('mv');
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
-const ok=navigator.xr && await Promise.race([navigator.xr.isSessionSupported('immersive-ar').catch(()=>false), new Promise(r=>setTimeout(()=>r(false),2000))]);
-if(ok){ mv.removeAttribute('ar'); $('xr').style.display='block'; $('xr').disabled=true; $('xr').textContent='Loading Ghost…'; $('note').textContent='Tap the button and point at the table. Ghost appears straight away.'; }
+const MODEL_URL = 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx';
+const TARGET_HEIGHT = 0.28;   // 28 cm tabletop size (set to 1.8 for life-size)
+const DIST = 0.65;            // metres in front of the camera
+const DROP = 0.30;            // metres below the camera
 
-const TARGET_HEIGHT=0.25;               // Tabletop height in metres (0.25 = 25 cm; set to 1.8 for life-size)
-const DIST=0.60, DROP=0.38;             // metres ahead of the phone, metres below the phone
-let renderer,scene,camera,mixer,ghost,session,hitSource,refSpace,gltf,placed,targetY,snapped;
+const $ = id => document.getElementById(id);
+const stage = $('stage'), arBtn = $('ar-btn'), note = $('note');
+const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBtn = $('retry');
+const camVideo = $('cam'), overlay = $('overlay'), statusEl = $('status');
 
-// Background preloading while user reads the page
-const preload=ok?new GLTFLoader().loadAsync('models/ghost_animated.glb').then(g=>{
-  gltf=g; $('xr').disabled=false; $('xr').textContent='Open AR camera';
-}).catch(()=>{ $('xr').disabled=false; $('xr').textContent='Open AR camera'; }):null;
+// ---- Three.js Scene & Renderer ----
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(stage.clientWidth, stage.clientHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.xr.enabled = true;
+stage.prepend(renderer.domElement);
 
-$('xr').onclick=async()=>{
-  if(!gltf) await preload;
-  if(!gltf) gltf=await new GLTFLoader().loadAsync('models/ghost_animated.glb');
-  renderer=new THREE.WebGLRenderer({antialias:false,alpha:true,powerPreference:'high-performance'});
-  renderer.setPixelRatio(1); renderer.xr.setFramebufferScaleFactor(0.85);
-  renderer.setSize(innerWidth,innerHeight); renderer.xr.enabled=true;
-  Object.assign(renderer.domElement.style,{position:'fixed',inset:0,zIndex:0});
-  document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, stage.clientWidth / Math.max(stage.clientHeight, 1), 0.02, 50);
+camera.position.set(0, 0.26, 0.62);
 
-  scene=new THREE.Scene(); camera=new THREE.PerspectiveCamera();
-  scene.add(new THREE.HemisphereLight(0xffffff,0x666655,2.4));
-  const d=new THREE.DirectionalLight(0xffffff,2); d.position.set(1,3,1); scene.add(d);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.14, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.25;
+controls.maxDistance = 2.5;
+controls.update();
 
-  ghost=gltf.scene; ghost.visible=false; ghost.traverse(o=>o.frustumCulled=false);
-  
-  // Tabletop auto-scale
-  const box=new THREE.Box3().setFromObject(ghost);
-  const rawH=box.max.y-box.min.y;
-  if(TARGET_HEIGHT&&rawH>0){ const s=TARGET_HEIGHT/rawH; ghost.scale.set(s,s,s); }
-  scene.add(ghost);
+// Lighting (optimized for FBX MeshPhongMaterial + PBR)
+scene.add(new THREE.HemisphereLight(0xffffff, 0x555c4a, 2.0));
+const keyLight = new THREE.DirectionalLight(0xfff8ee, 2.2);
+keyLight.position.set(1.5, 3.0, 2.0);
+scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0xcce0ff, 0.9);
+rimLight.position.set(-1.5, 1.5, -2.0);
+scene.add(rimLight);
 
-  // Play recommended military action loop (Action: breathing, aiming, burst fire, sector scan)
-  mixer=new THREE.AnimationMixer(ghost);
-  const actionClip=gltf.animations.find(a=>a.name==='Action')||gltf.animations[0];
-  if(actionClip) mixer.clipAction(actionClip).play();
+// Preview-only subtle ground ring
+const previewFloor = new THREE.Group();
+const grid = new THREE.PolarGridHelper(0.32, 8, 4, 48, 0x4b5736, 0x2c3420);
+previewFloor.add(grid);
+scene.add(previewFloor);
 
-  placed=false; snapped=false; hitSource=null;
-  const ov=$('overlay'); ov.style.display='block'; $('status').style.display='block'; $('status').textContent='Point at the table';
-  try{ session=await navigator.xr.requestSession('immersive-ar',{optionalFeatures:['hit-test','dom-overlay'],domOverlay:{root:ov}}); }
-  catch(e){ ov.style.display='none'; renderer.domElement.remove(); $('note').textContent='Could not start AR. Allow camera access and try again.'; return; }
+// Model container & subtle contact shadow under feet
+const modelRoot = new THREE.Group();
+scene.add(modelRoot);
 
-  renderer.xr.setReferenceSpaceType('local'); await renderer.xr.setSession(session);
-  refSpace=renderer.xr.getReferenceSpace();
-  session.requestReferenceSpace('viewer').then(sp=>session.requestHitTestSource({space:sp})).then(hs=>hitSource=hs).catch(()=>{ hitSource=null; });
+function createShadowDisc() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 6, 64, 64, 60);
+  g.addColorStop(0, 'rgba(0,0,0,0.45)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  const disc = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.24), mat);
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.y = 0.002;
+  return disc;
+}
+modelRoot.add(createShadowDisc());
 
-  $('exit').onclick=()=>session.end();
-  session.addEventListener('end',()=>{ renderer.setAnimationLoop(null); ov.style.display='none'; renderer.domElement.remove(); renderer.dispose(); });
+let mixer = null;
+let loadedModel = null;
+let modelReady = false;
+let userScale = 1.0;
 
-  const clock=new THREE.Clock(), q=new THREE.Quaternion(), f=new THREE.Vector3(), v=new THREE.Vector3();
-  renderer.setAnimationLoop((t,frame)=>{
-    const dt=Math.min(clock.getDelta(),0.1);
-    if(mixer) mixer.update(dt);
+// ---- Detect Android WebXR vs iOS/Camera AR ----
+let hasWebXR = false;
+async function detectAR() {
+  if (navigator.xr) {
+    hasWebXR = await Promise.race([
+      navigator.xr.isSessionSupported('immersive-ar').catch(() => false),
+      new Promise(r => setTimeout(() => r(false), 1800))
+    ]);
+  }
+  updateReadyUI();
+}
+detectAR();
 
-    if(frame){
-      if(!placed){
-        const vp=frame.getViewerPose(refSpace);
-        if(vp){
-          const p=vp.transform.position, o=vp.transform.orientation; q.set(o.x,o.y,o.z,o.w);
-          f.set(0,0,-1).applyQuaternion(q); f.y=0;
-          if(f.length()<0.3){ f.set(0,1,0).applyQuaternion(q); f.y=0; }
-          f.normalize();
-          ghost.position.set(p.x+f.x*DIST, p.y-DROP, p.z+f.z*DIST);
-          targetY=ghost.position.y; ghost.visible=true; placed=true;
-          setTimeout(()=>$('status').style.display='none',2500);
+function updateReadyUI() {
+  if (!modelReady) return;
+  arBtn.disabled = false;
+  arBtn.textContent = 'Open AR camera';
+  note.textContent = hasWebXR
+    ? 'Android WebXR AR ready. Point at the table — Ghost appears straight away.'
+    : 'iOS & Mobile Camera AR ready. Allow camera & motion access when prompted.';
+}
+
+// ---- Load FBX Directly from S3 URL ----
+const fbxLoader = new FBXLoader();
+fbxLoader.setCrossOrigin('anonymous');
+
+function loadFBX() {
+  loaderEl.classList.remove('hidden');
+  retryBtn.style.display = 'none';
+  bar.style.width = '8%';
+  loadText.textContent = 'Loading Ghost Salute…';
+  arBtn.disabled = true;
+  arBtn.textContent = 'Loading model…';
+
+  fbxLoader.load(
+    MODEL_URL,
+    fbx => {
+      if (loadedModel) modelRoot.remove(loadedModel);
+      loadedModel = fbx;
+
+      // Tune materials & prevent skinned mesh frustum culling
+      fbx.traverse(o => {
+        if (o.isMesh) {
+          o.frustumCulled = false;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach(m => {
+            if (!m) return;
+            if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
+            if (m.opacity === 0) m.opacity = 1;
+            if (m.shininess !== undefined) m.shininess = Math.min(m.shininess, 28);
+          });
         }
+      });
+
+      // Play embedded Salute animation
+      if (fbx.animations && fbx.animations.length > 0) {
+        mixer = new THREE.AnimationMixer(fbx);
+        const clip = fbx.animations.find(a => /salute|mixamo/i.test(a.name)) || fbx.animations[0];
+        mixer.clipAction(clip).play();
+        mixer.update(0);
       }
-      else if(hitSource && !snapped){
-        const hits=frame.getHitTestResults(hitSource); const pose=hits[0]&&hits[0].getPose(refSpace);
-        if(pose){
-          const pp=pose.transform.position, o=pose.transform.orientation; q.set(o.x,o.y,o.z,o.w); v.set(0,1,0).applyQuaternion(q);
-          if(v.y>0.9 && Math.hypot(pp.x-ghost.position.x,pp.z-ghost.position.z)<0.6 && Math.abs(pp.y-ghost.position.y)<0.8){
-            targetY=pp.y; snapped=true; hitSource.cancel();
-          }
-        }
+
+      // Normalize FBX scale (Mixamo cm -> metres) & align feet to y = 0
+      fbx.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(fbx);
+      const rawH = box.max.y - box.min.y;
+      const s = (rawH > 0.001 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 0.0016;
+      fbx.scale.setScalar(s);
+      fbx.updateMatrixWorld(true);
+
+      const box2 = new THREE.Box3().setFromObject(fbx);
+      const center = box2.getCenter(new THREE.Vector3());
+      fbx.position.set(-center.x, -box2.min.y, -center.z);
+
+      modelRoot.add(fbx);
+      modelReady = true;
+      bar.style.width = '100%';
+      loaderEl.classList.add('hidden');
+      updateReadyUI();
+    },
+    xhr => {
+      if (xhr.lengthComputable && xhr.total > 0) {
+        const pct = Math.min(99, Math.round((xhr.loaded / xhr.total) * 100));
+        bar.style.width = pct + '%';
+        loadText.textContent = `Loading Ghost Salute… ${pct}%`;
+      } else if (xhr.loaded > 0) {
+        bar.style.width = '55%';
+        loadText.textContent = `Loading Ghost Salute… ${(xhr.loaded / 1048576).toFixed(1)} MB`;
       }
-      if(placed) ghost.position.y+=(targetY-ghost.position.y)*Math.min(1,dt*6);
+    },
+    err => {
+      console.error('FBX load error:', err);
+      loadText.textContent = 'Could not load model from S3. Check internet connection or S3 bucket CORS policy.';
+      bar.style.width = '0%';
+      retryBtn.style.display = 'inline-block';
+      arBtn.textContent = 'Model unavailable';
     }
-    renderer.render(scene,camera);
-  });
+  );
+}
+retryBtn.onclick = loadFBX;
+loadFBX();
+
+// ---- AR State Management ----
+let arMode = 'none'; // 'none' | 'webxr' | 'camera'
+let xrSession = null, hitSource = null, refSpace = null;
+let xrPlaced = false, xrSnapped = false, xrTargetY = 0;
+
+let camStream = null;
+let gyroActive = false, hasGyroBase = false;
+const qDev = new THREE.Quaternion();
+const qYawFix = new THREE.Quaternion();
+const qCamTarget = new THREE.Quaternion();
+const zee = new THREE.Vector3(0, 0, 1);
+const upAxis = new THREE.Vector3(0, 1, 0);
+const qScreenRot = new THREE.Quaternion();
+const qBackCam = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+const devEuler = new THREE.Euler();
+const tmpVec = new THREE.Vector3();
+const tmpQuat = new THREE.Quaternion();
+
+function showStatus(msg, autoHideMs = 3000) {
+  statusEl.textContent = msg;
+  statusEl.style.opacity = '1';
+  statusEl.style.display = 'block';
+  if (autoHideMs > 0) {
+    clearTimeout(showStatus._t);
+    showStatus._t = setTimeout(() => { statusEl.style.opacity = '0'; }, autoHideMs);
+  }
+}
+
+function applyUserScale() {
+  modelRoot.scale.setScalar(userScale);
+}
+
+$('scale-down').onclick = () => { userScale = Math.max(0.3, userScale * 0.85); applyUserScale(); };
+$('scale-up').onclick = () => { userScale = Math.min(4.0, userScale * 1.18); applyUserScale(); };
+
+$('recenter').onclick = () => {
+  if (arMode === 'webxr') {
+    xrPlaced = false;
+    xrSnapped = false;
+    if (xrSession && !hitSource) {
+      xrSession.requestReferenceSpace('viewer')
+        .then(sp => xrSession.requestHitTestSource({ space: sp }))
+        .then(hs => hitSource = hs).catch(() => {});
+    }
+    showStatus('Recentered in front of camera', 1800);
+  } else if (arMode === 'camera') {
+    hasGyroBase = false;
+    modelRoot.position.set(0, -DROP, -DIST);
+    modelRoot.rotation.set(0, 0, 0);
+    showStatus('Recentered on table', 1800);
+  }
 };
+
+// ---- Mode 1: Android WebXR AR ----
+async function startWebXR() {
+  try {
+    overlay.style.display = 'block';
+    xrSession = await navigator.xr.requestSession('immersive-ar', {
+      optionalFeatures: ['hit-test', 'dom-overlay'],
+      domOverlay: { root: overlay }
+    });
+  } catch (e) {
+    overlay.style.display = 'none';
+    // Fallback to Camera AR if WebXR session fails
+    return startCameraAR();
+  }
+
+  arMode = 'webxr';
+  controls.enabled = false;
+  previewFloor.visible = false;
+  modelRoot.visible = false;
+  xrPlaced = false;
+  xrSnapped = false;
+  hitSource = null;
+
+  renderer.xr.setReferenceSpaceType('local');
+  await renderer.xr.setSession(xrSession);
+  refSpace = renderer.xr.getReferenceSpace();
+  xrSession.requestReferenceSpace('viewer')
+    .then(sp => xrSession.requestHitTestSource({ space: sp }))
+    .then(hs => hitSource = hs)
+    .catch(() => { hitSource = null; });
+
+  showStatus('Point at the table — Ghost appears automatically', 3000);
+
+  xrSession.addEventListener('end', () => {
+    arMode = 'none';
+    xrSession = null;
+    hitSource = null;
+    overlay.style.display = 'none';
+    restorePreview();
+  });
+}
+
+// ---- Mode 2: iOS Safari & Universal Live Camera AR ----
+function onDeviceOrientation(e) {
+  if (e.alpha == null || e.beta == null || e.gamma == null) return;
+  const alpha = THREE.MathUtils.degToRad(e.alpha);
+  const beta = THREE.MathUtils.degToRad(e.beta);
+  const gamma = THREE.MathUtils.degToRad(e.gamma);
+  const orient = THREE.MathUtils.degToRad(
+    (screen.orientation && screen.orientation.angle) || window.orientation || 0
+  );
+
+  devEuler.set(beta, alpha, -gamma, 'YXZ');
+  qDev.setFromEuler(devEuler);
+  qDev.multiply(qBackCam);
+  qDev.multiply(qScreenRot.setFromAxisAngle(zee, -orient));
+
+  if (!hasGyroBase) {
+    // Align initial horizontal heading to -Z while preserving true vertical gravity (+Y)
+    tmpVec.set(0, 0, -1).applyQuaternion(qDev);
+    tmpVec.y = 0;
+    if (tmpVec.lengthSq() > 0.001) {
+      tmpVec.normalize();
+      const yawOffset = Math.atan2(tmpVec.x, -tmpVec.z);
+      qYawFix.setFromAxisAngle(upAxis, yawOffset);
+    } else {
+      qYawFix.identity();
+    }
+    hasGyroBase = true;
+  }
+
+  qCamTarget.copy(qYawFix).multiply(qDev);
+  gyroActive = true;
+}
+
+async function startCameraAR() {
+  // iOS 13+ requires DeviceOrientation permission inside the user tap gesture
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try { await DeviceOrientationEvent.requestPermission(); } catch (_) {}
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    note.textContent = 'Camera access requires HTTPS. Open this page via an https:// link.';
+    return;
+  }
+
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+  } catch (e) {
+    note.textContent = 'Camera permission denied. Allow camera access in your browser settings and try again.';
+    return;
+  }
+
+  camVideo.srcObject = camStream;
+  camVideo.style.display = 'block';
+  try { await camVideo.play(); } catch (_) {}
+
+  arMode = 'camera';
+  document.body.classList.add('cam-ar');
+  overlay.style.display = 'block';
+  controls.enabled = false;
+  previewFloor.visible = false;
+
+  // Position camera at origin, place Ghost in front on the table facing the user
+  gyroActive = false;
+  hasGyroBase = false;
+  camera.fov = 60;
+  camera.position.set(0, 0, 0);
+  camera.quaternion.identity();
+  camera.aspect = window.innerWidth / Math.max(window.innerHeight, 1);
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  modelRoot.visible = true;
+  modelRoot.position.set(0, -DROP, -DIST);
+  modelRoot.rotation.set(0, 0, 0);
+
+  window.addEventListener('deviceorientation', onDeviceOrientation, true);
+  showStatus('Drag to move • Pinch to resize • Tap Recenter anytime', 3800);
+}
+
+function stopCameraAR() {
+  window.removeEventListener('deviceorientation', onDeviceOrientation, true);
+  if (camStream) {
+    camStream.getTracks().forEach(t => t.stop());
+    camStream = null;
+  }
+  camVideo.srcObject = null;
+  camVideo.style.display = 'none';
+  document.body.classList.remove('cam-ar');
+  overlay.style.display = 'none';
+  arMode = 'none';
+  restorePreview();
+}
+
+function restorePreview() {
+  userScale = 1.0;
+  applyUserScale();
+  modelRoot.visible = true;
+  modelRoot.position.set(0, 0, 0);
+  modelRoot.rotation.set(0, 0, 0);
+  previewFloor.visible = true;
+  camera.fov = 55;
+  camera.position.set(0, 0.26, 0.62);
+  controls.target.set(0, 0.14, 0);
+  controls.enabled = true;
+  controls.update();
+  onResize();
+}
+
+arBtn.onclick = async () => {
+  if (!modelReady) return;
+  if (hasWebXR) await startWebXR();
+  else await startCameraAR();
+};
+
+$('exit').onclick = () => {
+  if (arMode === 'webxr' && xrSession) xrSession.end();
+  else if (arMode === 'camera') stopCameraAR();
+};
+
+// ---- Touch Drag & Pinch Gestures for iOS / Camera AR ----
+const pointers = new Map();
+let lastPinchDist = 0;
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (arMode !== 'camera') return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    lastPinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+  }
+});
+
+renderer.domElement.addEventListener('pointermove', e => {
+  if (arMode !== 'camera' || !pointers.has(e.pointerId)) return;
+  const prev = pointers.get(e.pointerId);
+  const dx = e.clientX - prev.x;
+  const dy = e.clientY - prev.y;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size === 1) {
+    // Move Ghost in screen-aligned horizontal/vertical axes
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    const moveScale = 0.0014;
+    modelRoot.position.addScaledVector(right, dx * moveScale);
+    modelRoot.position.addScaledVector(up, -dy * moveScale);
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    if (lastPinchDist > 0) {
+      userScale = THREE.MathUtils.clamp(userScale * (dist / lastPinchDist), 0.3, 4.0);
+      applyUserScale();
+    }
+    lastPinchDist = dist;
+  }
+});
+
+function clearPointer(e) { pointers.delete(e.pointerId); if (pointers.size < 2) lastPinchDist = 0; }
+renderer.domElement.addEventListener('pointerup', clearPointer);
+renderer.domElement.addEventListener('pointercancel', clearPointer);
+
+// ---- Resize Handler ----
+function onResize() {
+  if (arMode === 'webxr') return;
+  const w = arMode === 'camera' ? window.innerWidth : stage.clientWidth;
+  const h = arMode === 'camera' ? window.innerHeight : Math.max(stage.clientHeight, 1);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', onResize);
+
+// ---- Main Animation & AR Render Loop ----
+const clock = new THREE.Clock();
+const xrFwd = new THREE.Vector3();
+const xrUp = new THREE.Vector3();
+
+renderer.setAnimationLoop((t, frame) => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (mixer) mixer.update(dt);
+
+  if (arMode === 'webxr' && frame) {
+    if (!xrPlaced) {
+      const vp = frame.getViewerPose(refSpace);
+      if (vp) {
+        const p = vp.transform.position;
+        const o = vp.transform.orientation;
+        tmpQuat.set(o.x, o.y, o.z, o.w);
+        xrFwd.set(0, 0, -1).applyQuaternion(tmpQuat);
+        xrFwd.y = 0;
+        if (xrFwd.length() < 0.25) {
+          xrFwd.set(0, 1, 0).applyQuaternion(tmpQuat);
+          xrFwd.y = 0;
+        }
+        xrFwd.normalize();
+
+        modelRoot.position.set(p.x + xrFwd.x * DIST, p.y - DROP, p.z + xrFwd.z * DIST);
+        modelRoot.rotation.set(0, Math.atan2(-xrFwd.x, -xrFwd.z), 0); // Face the user!
+        xrTargetY = modelRoot.position.y;
+        modelRoot.visible = true;
+        xrPlaced = true;
+      }
+    } else if (hitSource && !xrSnapped) {
+      const hits = frame.getHitTestResults(hitSource);
+      const pose = hits[0] && hits[0].getPose(refSpace);
+      if (pose) {
+        const pp = pose.transform.position;
+        const o = pose.transform.orientation;
+        tmpQuat.set(o.x, o.y, o.z, o.w);
+        xrUp.set(0, 1, 0).applyQuaternion(tmpQuat);
+        if (xrUp.y > 0.9 &&
+            Math.hypot(pp.x - modelRoot.position.x, pp.z - modelRoot.position.z) < 0.6 &&
+            Math.abs(pp.y - modelRoot.position.y) < 0.8) {
+          xrTargetY = pp.y;
+          xrSnapped = true;
+          hitSource.cancel();
+          hitSource = null;
+        }
+      }
+    }
+    if (xrPlaced) {
+      modelRoot.position.y += (xrTargetY - modelRoot.position.y) * Math.min(1, dt * 6);
+    }
+  } else if (arMode === 'camera') {
+    if (gyroActive) {
+      camera.quaternion.slerp(qCamTarget, Math.min(1, dt * 12));
+    }
+  } else {
+    controls.update();
+  }
+
+  renderer.render(scene, camera);
+});
 </script>
 </body>
 </html>

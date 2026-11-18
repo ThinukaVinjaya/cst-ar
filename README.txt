@@ -1,32 +1,35 @@
-CST LAN Challenge - Call of Duty 4 Military AR Diorama (Android & iOS)
+CST LAN Challenge - Ghost Salute WebAR (Android & iOS)
 
 Overview:
-- Designed to augment a real-world physical table decoration item (centerpiece / loot box / trophy) placed on the table.
-- The center (radius ~20 cm on the real table) is kept completely clear for the real physical item.
-- Ghost and authentic Call of Duty 4 military items form a tactical fortified perimeter encircling the centerpiece:
-  1. Ghost (Simon Riley): Stands at the perimeter, performing an automatic continuous 8.5s combat loop (idle breathing, raising rifle, 3-round burst fire with recoil, perimeter scan).
-  2. M18A1 Claymore Mine: With scissor wire tripod legs and "FRONT TOWARD ENEMY" stenciling guarding the front approach.
-  3. 7.62mm NATO Ammo Crates & Cans: Heavy military crates and ammo cans with metal latches and military stenciling.
-  4. CoD4 Intel Tactical Laptop: Open military Toughbook terminal resting on an equipment case with a glowing green UAV radar display.
-  5. Curved Sandbag Fortification: Multi-tier burlap sandbag barricade securing the right flank.
-  6. C4 Demolition Charge: Explosive block with black tape, wires, and digital receiver with red active LED.
-  7. Tactical Supply Drop Crate: Reinforced military equipment container on the left flank.
+- All local 3D model files have been removed from the repository.
+- Loads the animated FBX model directly from AWS S3:
+  https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx
+- Automatically normalizes FBX scale to tabletop size (28 cm), places feet on the ground, and plays the embedded Salute animation.
 
-Platform Compatibility:
-- Android (Chrome + ARCore): Custom WebXR AR with instant camera-front placement and automatic table surface height snapping.
-- iPhone (Safari + ARKit): Fully 64-byte aligned Apple USDZ with preliminary horizontal plane anchoring (auto-places on the table with zero tapping).
+Cross-Platform AR Support:
+- Android (Chrome + ARCore): Native WebXR immersive-ar with instant camera-front placement, automatic table surface height snapping (hit-test), and Recenter / Size controls.
+- iOS (iPhone/iPad Safari) & Non-ARCore Android: Live rear-camera WebRTC AR with gyroscope/motion tracking, 1-finger drag placement, 2-finger pinch-to-resize, and full skeletal FBX animation (no USDZ needed, zero "Object could not be opened" errors).
 
-Files:
-- index.html                   : WebAR frontend with WebXR, Three.js, and <model-viewer>.
-- models/ghost_animated.glb    : Complete 3D diorama with Ghost's combat loop and military perimeter props.
-- models/ghost_animated.usdz   : Strictly 64-byte aligned Apple USDZ package for iPhone.
-- tools/build_military_props.py: Builds all 3D props, textures, and updates both GLB and USDZ.
-- tools/optimize_and_animate.py: Generates Ghost's tactical combat sequence.
-- tools/build_ghost_usdz.py    : Compliant 64-byte aligned USDZ packager for iOS.
+IMPORTANT - AWS S3 Bucket CORS Configuration:
+Because mobile browsers fetch the FBX file from S3 using JavaScript, make sure your S3 bucket (`cst-lan`) has CORS enabled under Permissions -> Cross-origin resource sharing (CORS):
 
-Rebuilding:
-- python tools/build_military_props.py
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedOrigins": ["*"],
+    "ExposeHeaders": ["Content-Length"]
+  }
+]
+
+Also ensure public read access (`s3:GetObject`) is enabled for `Gost Salute.fbx`.
+
+Tuning in index.html:
+- MODEL_URL     : S3 URL of the FBX model.
+- TARGET_HEIGHT : Tabletop character height in metres (0.28 = 28 cm; set to 1.8 for life-size).
+- DIST & DROP   : Initial distance ahead of and below the phone camera.
 
 Hosting:
-- Host the root folder on HTTPS (e.g. Netlify Drop, Vercel, GitHub Pages).
+- Host the root folder on HTTPS (e.g. Netlify Drop, Vercel, GitHub Pages) — HTTPS is required for camera & WebXR access on Android and iOS.
 - Generate event QR code: python make_qr.py https://your-hosted-domain/
+
