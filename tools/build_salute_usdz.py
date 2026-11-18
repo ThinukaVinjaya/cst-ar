@@ -1,84 +1,23 @@
 #!/usr/bin/env python3
 """
-Builds models/ghost_salute.usdz (native UsdSkel animated skeleton + 64-byte ARKit alignment)
-directly from models/ghost_salute.glb for iPhone Safari Apple AR Quick Look.
+Builds models/ghost_salute.usdz as a genuine Apple ARKit binary (.usdc) USDZ package
+with native Pixar OpenUSD UsdSkel skeletal animation from models/ghost_salute.glb.
 """
-import struct, json, os, zlib, math
+import json
+import math
+import os
+import shutil
+import struct
+import tempfile
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdSkel, UsdUtils, Vt
 
-GLB_PATH = 'models/ghost_salute.glb'
-OUT_USDZ = 'models/ghost_salute.usdz'
+GLB_PATH = os.path.abspath('models/ghost_salute.glb')
+OUT_USDZ = os.path.abspath('models/ghost_salute.usdz')
 
-class ArkitUsdzWriter:
-    def __init__(self, filename):
-        self.f = open(filename, 'wb')
-        self.entries = []
-
-    def add_file(self, arcname, data):
-        cur_offset = self.f.tell()
-        arcname_bytes = arcname.encode('utf-8')
-        name_len = len(arcname_bytes)
-        base_len = cur_offset + 30 + name_len
-        pad_needed = (64 - (base_len % 64)) % 64
-        if pad_needed < 4:
-            pad_needed += 64
-        extra = struct.pack('<HH', 0x1986, pad_needed - 4) + b'\x00' * (pad_needed - 4)
-        extra_len = len(extra)
-        data_offset = cur_offset + 30 + name_len + extra_len
-        assert data_offset % 64 == 0, f'Offset {data_offset} not 64-byte aligned!'
-        crc = zlib.crc32(data) & 0xffffffff
-        size = len(data)
-        self.f.write(struct.pack('<4s5H3I2H', b'PK\x03\x04', 20, 0, 0, 0, 0, crc, size, size, name_len, extra_len))
-        self.f.write(arcname_bytes)
-        self.f.write(extra)
-        self.f.write(data)
-        self.entries.append({'name': arcname_bytes, 'crc': crc, 'size': size, 'offset': cur_offset, 'extra': extra})
-
-    def close(self):
-        cd_start = self.f.tell()
-        for e in self.entries:
-            self.f.write(struct.pack('<4s6H3I5H2I', b'PK\x01\x02', 20, 20, 0, 0, 0, 0,
-                                     e['crc'], e['size'], e['size'], len(e['name']), len(e['extra']), 0, 0, 0, 0, e['offset']))
-            self.f.write(e['name'])
-            self.f.write(e['extra'])
-        cd_len = self.f.tell() - cd_start
-        self.f.write(struct.pack('<4s4H2IH', b'PK\x05\x06', 0, 0, len(self.entries), len(self.entries), cd_len, cd_start, 0))
-        self.f.close()
-
-def mat4_from_tr(t, q):
-    x, y, z, w = q
-    return [
-        1-2*(y*y+z*z), 2*(x*y+z*w), 2*(x*z-y*w), 0.0,
-        2*(x*y-z*w), 1-2*(x*x+z*z), 2*(y*z+x*w), 0.0,
-        2*(x*z+y*w), 2*(y*z-x*w), 1-2*(x*x+y*y), 0.0,
-        float(t[0]), float(t[1]), float(t[2]), 1.0
-    ]
-
-def mm_col(A, B):
-    return [sum(A[k*4+r]*B[c*4+k] for k in range(4)) for c in range(4) for r in range(4)]
-
-def inv_mat4_col(M):
-    A = [[M[c*4+r] for c in range(4)] + [1.0 if r==c else 0.0 for c in range(4)] for r in range(4)]
-    for i in range(4):
-        piv = max(range(i, 4), key=lambda r: abs(A[r][i]))
-        A[i], A[piv] = A[piv], A[i]
-        div = A[i][i]
-        if abs(div) < 1e-12:
-            return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
-        A[i] = [v / div for v in A[i]]
-        for r in range(4):
-            if r != i:
-                f = A[r][i]
-                A[r] = [A[r][c] - f * A[i][c] for c in range(8)]
-    return [A[r][4+c] for c in range(4) for r in range(4)]
-
-def fmt_mat4_usd(m):
-    return '( ' + ', '.join(
-        '(' + ', '.join(f'{m[r*4+c]:.6f}' for c in range(4)) + ')'
-        for r in range(4)
-    ) + ' )'
 
 def sanitize_tok(name):
     return ''.join(c if c.isalnum() or c == '_' else '_' for c in name)
+
 
 def build_salute_usdz():
     with open(GLB_PATH, 'rb') as f:
@@ -106,11 +45,11 @@ def build_salute_usdz():
             out.append(vals[0] if ncomp == 1 else list(vals))
         return out
 
-    # 1. Unified skeleton in topological parent-before-child order starting at mixamorig:Hips
+    # 1. Unified topological skeleton starting at mixamorig:Hips
     hips_idx = next(i for i, n in enumerate(nodes) if n.get('name') == 'mixamorig:Hips')
     joint_nodes = []
     joint_paths = []
-    joint_parent_local = []
+    joint_parent = []
     node_to_joint = {}
 
     def dfs(ni, prefix, parent_ji):
@@ -119,7 +58,7 @@ def build_salute_usdz():
         ji = len(joint_nodes)
         joint_nodes.append(ni)
         joint_paths.append(path)
-        joint_parent_local.append(parent_ji)
+        joint_parent.append(parent_ji)
         node_to_joint[ni] = ji
         for ci in nodes[ni].get('children', []):
             dfs(ci, path, ji)
@@ -134,19 +73,29 @@ def build_salute_usdz():
             if jn not in joint_ibm:
                 joint_ibm[jn] = ibms[ji_local]
 
+    # Build Pixar Gf.Matrix4d restTransforms & bindTransforms (identical to proven tools/build_usdz.py)
     rest_mats = []
     bind_mats = []
     for ji, jn in enumerate(joint_nodes):
         n = nodes[jn]
-        rm = mat4_from_tr(n.get('translation', [0, 0, 0]), n.get('rotation', [0, 0, 0, 1]))
+        t = n.get('translation', [0.0, 0.0, 0.0])
+        q = n.get('rotation', [0.0, 0.0, 0.0, 1.0])
+        s = n.get('scale', [1.0, 1.0, 1.0])
+        ql = math.hypot(q[0], q[1], q[2], q[3]) or 1.0
+        rm = UsdSkel.MakeTransform(
+            Gf.Vec3f(float(t[0]), float(t[1]), float(t[2])),
+            Gf.Quatf(float(q[3] / ql), Gf.Vec3f(float(q[0] / ql), float(q[1] / ql), float(q[2] / ql))),
+            Gf.Vec3h(float(s[0]), float(s[1]), float(s[2])),
+        )
         rest_mats.append(rm)
         if jn in joint_ibm:
-            bind_mats.append(inv_mat4_col(joint_ibm[jn]))
+            bind_mats.append(Gf.Matrix4d(*joint_ibm[jn]).GetInverse())
         else:
-            pji = joint_parent_local[ji]
-            bind_mats.append(mm_col(bind_mats[pji], rm) if pji >= 0 else rm)
+            pji = joint_parent[ji]
+            # Row-vector multiplication: childLocal * parentWorld
+            bind_mats.append(rm * bind_mats[pji] if pji >= 0 else rm)
 
-    # 2. Extract Salute animation frames & enforce quaternion hemisphere continuity
+    # 2. Extract Salute animation frames with normalized, hemisphere-continuous quaternions
     anim = g['animations'][0]
     anim_t = {}
     anim_r = {}
@@ -159,219 +108,185 @@ def build_salute_usdz():
         if path == 'translation':
             anim_t[ni] = vals
         elif path == 'rotation':
-            # Normalize & ensure smooth hemisphere continuity across consecutive frames
             clean = []
             prev = None
             for q in vals:
-                l = math.hypot(q[0], q[1], q[2], q[3]) or 1.0
-                q = [q[0]/l, q[1]/l, q[2]/l, q[3]/l]
+                ql = math.hypot(q[0], q[1], q[2], q[3]) or 1.0
+                q = [q[0] / ql, q[1] / ql, q[2] / ql, q[3] / ql]
                 if prev is not None and (prev[0]*q[0] + prev[1]*q[1] + prev[2]*q[2] + prev[3]*q[3]) < 0:
                     q = [-q[0], -q[1], -q[2], -q[3]]
                 clean.append(q)
                 prev = q
             anim_r[ni] = clean
 
-    # 3. Extract textures
-    tex_files = {}
-    for i, img in enumerate(g.get('images', [])):
-        bv = bvs[img['bufferView']]
-        off = bv.get('byteOffset', 0)
-        ext = 'png' if 'png' in img.get('mimeType', '') else 'jpg'
-        fname = f'textures/t{i}.{ext}'
-        tex_files[i] = (fname, buf[off:off + bv['byteLength']])
+    # 3. Create binary .usdc stage + textures inside a temp dir, then package with UsdUtils.CreateNewARKitUsdzPackage
+    tmpdir = tempfile.mkdtemp(prefix='ghost_usdz_')
+    old_cwd = os.getcwd()
+    try:
+        tex_dir = os.path.join(tmpdir, 'tex')
+        os.makedirs(tex_dir, exist_ok=True)
+        tex_rel = {}
+        for i, img in enumerate(g.get('images', [])):
+            bv = bvs[img['bufferView']]
+            off = bv.get('byteOffset', 0)
+            ext = 'png' if 'png' in img.get('mimeType', '') else 'jpg'
+            fname = f't{i}.{ext}'
+            with open(os.path.join(tex_dir, fname), 'wb') as tf:
+                tf.write(buf[off:off + bv['byteLength']])
+            tex_rel[i] = f'tex/{fname}'
 
-    # 4. Build strict OpenUSD / Apple RealityKit-compliant UsdSkel USDA (NO trailing commas!)
-    L = []
-    L.append('#usda 1.0')
-    L.append('(')
-    L.append('    defaultPrim = "World"')
-    L.append('    metersPerUnit = 1')
-    L.append('    upAxis = "Y"')
-    L.append('    startTimeCode = 0')
-    L.append(f'    endTimeCode = {num_frames - 1}')
-    L.append('    framesPerSecond = 24')
-    L.append('    timeCodesPerSecond = 24')
-    L.append('    customLayerData = {')
-    L.append('        bool autoPlay = true')
-    L.append('        string playbackMode = "loop"')
-    L.append('    }')
-    L.append(')')
-    L.append('')
-    L.append('def Xform "World" (')
-    L.append('    prepend apiSchemas = ["Preliminary_AnchoringAPI"]')
-    L.append(')')
-    L.append('{')
-    L.append('    token preliminary:anchoring:type = "plane"')
-    L.append('    token preliminary:planeAnchoring:alignment = "horizontal"')
-    L.append('')
+        usda_path = os.path.join(tmpdir, 'ghost_salute.usda')
+        st = Usd.Stage.CreateNew(usda_path)
+        UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.y)
+        UsdGeom.SetStageMetersPerUnit(st, 1.0)
+        st.SetTimeCodesPerSecond(24.0)
+        st.SetFramesPerSecond(24.0)
+        st.SetStartTimeCode(0)
+        st.SetEndTimeCode(num_frames - 1)
+        st.GetRootLayer().customLayerData = {'autoPlay': True, 'playbackMode': 'loop'}
 
-    # Materials
-    L.append('    def Scope "Looks"')
-    L.append('    {')
-    textures = g.get('textures', [])
-    for k, mat in enumerate(g['materials']):
-        pbr = mat.get('pbrMetallicRoughness', {})
-        bc = pbr.get('baseColorFactor', [1.0, 1.0, 1.0, 1.0])
-        rough = pbr.get('roughnessFactor', 0.8)
-        metal = pbr.get('metallicFactor', 0.05)
-        tf = None
-        if 'baseColorTexture' in pbr:
-            ti = pbr['baseColorTexture']['index']
-            ii = textures[ti]['source']
-            tf = tex_files[ii][0]
+        world = UsdGeom.Xform.Define(st, '/World')
+        st.SetDefaultPrim(world.GetPrim())
+        # Apple preliminary anchoring: horizontal plane (table) auto-placement
+        world.GetPrim().SetMetadata('apiSchemas', Sdf.TokenListOp.CreateExplicit(['Preliminary_AnchoringAPI']))
+        world.GetPrim().CreateAttribute('preliminary:anchoring:type', Sdf.ValueTypeNames.Token, custom=False).Set('plane')
+        world.GetPrim().CreateAttribute('preliminary:planeAnchoring:alignment', Sdf.ValueTypeNames.Token, custom=False).Set('horizontal')
 
-        L.append(f'        def Material "M{k}"')
-        L.append('        {')
-        L.append(f'            token outputs:surface.connect = </World/Looks/M{k}/Surf.outputs:surface>')
-        L.append('            def Shader "Surf"')
-        L.append('            {')
-        L.append('                uniform token info:id = "UsdPreviewSurface"')
-        if tf:
-            L.append(f'                color3f inputs:diffuseColor.connect = </World/Looks/M{k}/Tex.outputs:rgb>')
-        else:
-            L.append(f'                color3f inputs:diffuseColor = ({bc[0]:.3f}, {bc[1]:.3f}, {bc[2]:.3f})')
-        L.append(f'                float inputs:roughness = {rough:.3f}')
-        L.append(f'                float inputs:metallic = {metal:.3f}')
-        L.append('                token outputs:surface')
-        L.append('            }')
-        if tf:
-            L.append('            def Shader "Tex"')
-            L.append('            {')
-            L.append('                uniform token info:id = "UsdUVTexture"')
-            L.append(f'                asset inputs:file = @{tf}@')
-            L.append(f'                float2 inputs:st.connect = </World/Looks/M{k}/St.outputs:result>')
-            L.append('                token inputs:sourceColorSpace = "sRGB"')
-            L.append('                float3 outputs:rgb')
-            L.append('            }')
-            L.append('            def Shader "St"')
-            L.append('            {')
-            L.append('                uniform token info:id = "UsdPrimvarReader_float2"')
-            L.append('                token inputs:varname = "st"')
-            L.append('                float2 outputs:result')
-            L.append('            }')
-        L.append('        }')
-    L.append('    }')
-    L.append('')
+        joints_vt = Vt.TokenArray(joint_paths)
+        bind_vt = Vt.Matrix4dArray(bind_mats)
+        rest_vt = Vt.Matrix4dArray(rest_mats)
 
-    joints_tok_str = ', '.join(f'"{p}"' for p in joint_paths)
-    ones = ', '.join('(1, 1, 1)' for _ in range(nj))
+        # Shared SkelAnimation at /World/Anim (matches proven tools/build_usdz.py!)
+        anim_prim = UsdSkel.Animation.Define(st, '/World/Anim')
+        anim_prim.CreateJointsAttr(joints_vt)
+        ta = anim_prim.CreateTranslationsAttr()
+        ra = anim_prim.CreateRotationsAttr()
+        sa = anim_prim.CreateScalesAttr()
+        ones_vt = Vt.Vec3hArray([Gf.Vec3h(1, 1, 1) for _ in range(nj)])
 
-    # Top-level SkelAnimation at /World/Anim (matching proven Apple AR Quick Look UsdSkel layout)
-    L.append('    def SkelAnimation "Anim"')
-    L.append('    {')
-    L.append(f'        uniform token[] joints = [{joints_tok_str}]')
-    L.append('        float3[] translations.timeSamples = {')
-    for f_idx in range(num_frames):
-        ts = []
-        for jn in joint_nodes:
-            v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0, 0, 0])
-            ts.append(f'({v[0]:.5f}, {v[1]:.5f}, {v[2]:.5f})')
-        comma = ',' if f_idx < num_frames - 1 else ''
-        L.append(f'            {f_idx}: [{", ".join(ts)}]{comma}')
-    L.append('        }')
-    L.append('        quatf[] rotations.timeSamples = {')
-    for f_idx in range(num_frames):
-        rs = []
-        for jn in joint_nodes:
-            q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0, 0, 0, 1])
-            rs.append(f'({q[3]:.5f}, {q[0]:.5f}, {q[1]:.5f}, {q[2]:.5f})')
-        comma = ',' if f_idx < num_frames - 1 else ''
-        L.append(f'            {f_idx}: [{", ".join(rs)}]{comma}')
-    L.append('        }')
-    L.append('        half3[] scales.timeSamples = {')
-    for f_idx in range(num_frames):
-        comma = ',' if f_idx < num_frames - 1 else ''
-        L.append(f'            {f_idx}: [{ones}]{comma}')
-    L.append('        }')
-    L.append('    }')
-    L.append('')
+        for f_idx in range(num_frames):
+            tc = Usd.TimeCode(f_idx)
+            ts = []
+            rs = []
+            for jn in joint_nodes:
+                v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0.0, 0.0, 0.0])
+                ts.append(Gf.Vec3f(float(v[0]), float(v[1]), float(v[2])))
+                q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0.0, 0.0, 0.0, 1.0])
+                ql = math.hypot(q[0], q[1], q[2], q[3]) or 1.0
+                rs.append(Gf.Quatf(float(q[3] / ql), Gf.Vec3f(float(q[0] / ql), float(q[1] / ql), float(q[2] / ql))))
+            ta.Set(Vt.Vec3fArray(ts), tc)
+            ra.Set(Vt.QuatfArray(rs), tc)
+            sa.Set(ones_vt, tc)
 
-    # SkelRoot containing Skeleton (pointing to /World/Anim) + 12 Skinned Meshes
-    L.append('    def SkelRoot "Rig" (')
-    L.append('        prepend apiSchemas = ["SkelBindingAPI"]')
-    L.append('    )')
-    L.append('    {')
-    L.append('        rel skel:skeleton = </World/Rig/Skel>')
-    L.append('')
-    L.append('        def Skeleton "Skel" (')
-    L.append('            prepend apiSchemas = ["SkelBindingAPI"]')
-    L.append('        )')
-    L.append('        {')
-    L.append(f'            uniform token[] joints = [{joints_tok_str}]')
-    L.append('            uniform matrix4d[] bindTransforms = [' + ', '.join(fmt_mat4_usd(m) for m in bind_mats) + ']')
-    L.append('            uniform matrix4d[] restTransforms = [' + ', '.join(fmt_mat4_usd(m) for m in rest_mats) + ']')
-    L.append('            rel skel:animationSource = </World/Anim>')
-    L.append('        }')
+        # Materials under /World/Looks
+        textures = g.get('textures', [])
+        mats = []
+        for k, mat in enumerate(g['materials']):
+            pbr = mat.get('pbrMetallicRoughness', {})
+            bc = pbr.get('baseColorFactor', [1.0, 1.0, 1.0, 1.0])
+            rough = float(pbr.get('roughnessFactor', 0.8))
+            metal = float(pbr.get('metallicFactor', 0.05))
+            mp = f'/World/Looks/M{k}'
+            umat = UsdShade.Material.Define(st, mp)
+            sh = UsdShade.Shader.Define(st, mp + '/Surf')
+            sh.CreateIdAttr('UsdPreviewSurface')
+            sh.CreateInput('roughness', Sdf.ValueTypeNames.Float).Set(rough)
+            sh.CreateInput('metallic', Sdf.ValueTypeNames.Float).Set(metal)
+            if 'baseColorTexture' in pbr:
+                ti = pbr['baseColorTexture']['index']
+                ii = textures[ti]['source']
+                rd = UsdShade.Shader.Define(st, mp + '/St')
+                rd.CreateIdAttr('UsdPrimvarReader_float2')
+                rd.CreateInput('varname', Sdf.ValueTypeNames.Token).Set('st')
+                rd.CreateOutput('result', Sdf.ValueTypeNames.Float2)
 
-    mesh_nodes = [n for n in nodes if n.get('mesh') is not None]
-    for k, mn in enumerate(mesh_nodes):
-        mi = mn['mesh']
-        si = mn['skin']
-        sk = g['skins'][si]
-        prim = g['meshes'][mi]['primitives'][0]
-        mat_idx = prim.get('material', 0)
+                tx = UsdShade.Shader.Define(st, mp + '/Tex')
+                tx.CreateIdAttr('UsdUVTexture')
+                tx.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(tex_rel[ii])
+                tx.CreateInput('st', Sdf.ValueTypeNames.Float2).ConnectToSource(rd.ConnectableAPI(), 'result')
+                tx.CreateInput('sourceColorSpace', Sdf.ValueTypeNames.Token).Set('sRGB')
+                tx.CreateOutput('rgb', Sdf.ValueTypeNames.Float3)
 
-        pbr_m = g['materials'][mat_idx].get('pbrMetallicRoughness', {})
-        bc_m = pbr_m.get('baseColorFactor', [1, 1, 1, 1])
-        if len(bc_m) > 3 and bc_m[3] == 0:
-            continue
+                sh.CreateInput('diffuseColor', Sdf.ValueTypeNames.Color3f).ConnectToSource(tx.ConnectableAPI(), 'rgb')
+            else:
+                sh.CreateInput('diffuseColor', Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(float(bc[0]), float(bc[1]), float(bc[2])))
+            umat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), 'surface')
+            mats.append(umat)
 
-        pts = read_acc(prim['attributes']['POSITION'])
-        nrms = read_acc(prim['attributes']['NORMAL'])
-        uvs = read_acc(prim['attributes']['TEXCOORD_0'])
-        jidxs = read_acc(prim['attributes']['JOINTS_0'])
-        wgts = read_acc(prim['attributes']['WEIGHTS_0'])
-        idxs = read_acc(prim['indices'])
+        # SkelRoot + Skeleton + 12 Skinned Meshes under /World/Ghost/Rig (mirrors proven tools/build_usdz.py!)
+        UsdGeom.Xform.Define(st, '/World/Ghost')
+        root = UsdSkel.Root.Define(st, '/World/Ghost/Rig')
+        sk = UsdSkel.Skeleton.Define(st, '/World/Ghost/Rig/Skel')
+        sk.CreateJointsAttr(joints_vt)
+        sk.CreateBindTransformsAttr(bind_vt)
+        sk.CreateRestTransformsAttr(rest_vt)
+        UsdSkel.BindingAPI.Apply(sk.GetPrim()).CreateAnimationSourceRel().SetTargets([Sdf.Path('/World/Anim')])
+        UsdSkel.BindingAPI.Apply(root.GetPrim()).CreateSkeletonRel().SetTargets([sk.GetPath()])
 
-        remap = [node_to_joint[jn] for jn in sk['joints']]
-        flat_ji = []
-        flat_jw = []
-        for j4, w4 in zip(jidxs, wgts):
-            s = sum(w4) or 1.0
-            for c in range(4):
-                flat_ji.append(str(remap[int(j4[c])]))
-                flat_jw.append(f'{w4[c]/s:.3f}')
+        mesh_nodes = [n for n in nodes if n.get('mesh') is not None]
+        built_meshes = 0
+        for k, mn in enumerate(mesh_nodes):
+            mi = mn['mesh']
+            si = mn['skin']
+            sk_g = g['skins'][si]
+            prim = g['meshes'][mi]['primitives'][0]
+            mat_idx = prim.get('material', 0)
 
-        n_faces = len(idxs) // 3
-        L.append(f'        def Mesh "Mesh{k}" (')
-        L.append('            prepend apiSchemas = ["MaterialBindingAPI", "SkelBindingAPI"]')
-        L.append('        )')
-        L.append('        {')
-        L.append(f'            rel material:binding = </World/Looks/M{mat_idx}>')
-        L.append('            rel skel:skeleton = </World/Rig/Skel>')
-        L.append('            uniform token subdivisionScheme = "none"')
-        L.append('            matrix4d primvars:skel:geomBindTransform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) )')
-        L.append('            point3f[] points = [' + ', '.join(f'({p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f})' for p in pts) + ']')
-        L.append('            int[] faceVertexCounts = [' + ', '.join(['3'] * n_faces) + ']')
-        L.append('            int[] faceVertexIndices = [' + ', '.join(str(i) for i in idxs) + ']')
-        L.append('            normal3f[] normals = [' + ', '.join(f'({n[0]:.3f}, {n[1]:.3f}, {n[2]:.3f})' for n in nrms) + '] (')
-        L.append('                interpolation = "vertex"')
-        L.append('            )')
-        L.append('            texCoord2f[] primvars:st = [' + ', '.join(f'({u[0]:.3f}, {1.0 - u[1]:.3f})' for u in uvs) + '] (')
-        L.append('                interpolation = "vertex"')
-        L.append('            )')
-        L.append('            int[] primvars:skel:jointIndices = [' + ', '.join(flat_ji) + '] (')
-        L.append('                elementSize = 4')
-        L.append('                interpolation = "vertex"')
-        L.append('            )')
-        L.append('            float[] primvars:skel:jointWeights = [' + ', '.join(flat_jw) + '] (')
-        L.append('                elementSize = 4')
-        L.append('                interpolation = "vertex"')
-        L.append('            )')
-        L.append('        }')
+            pbr_m = g['materials'][mat_idx].get('pbrMetallicRoughness', {})
+            bc_m = pbr_m.get('baseColorFactor', [1, 1, 1, 1])
+            if len(bc_m) > 3 and bc_m[3] == 0:
+                continue
 
-    L.append('    }')
-    L.append('}')
+            pts = read_acc(prim['attributes']['POSITION'])
+            nrms = read_acc(prim['attributes']['NORMAL'])
+            uvs = read_acc(prim['attributes']['TEXCOORD_0'])
+            jidxs = read_acc(prim['attributes']['JOINTS_0'])
+            wgts = read_acc(prim['attributes']['WEIGHTS_0'])
+            idxs = read_acc(prim['indices'])
 
-    usda_bytes = '\n'.join(L).encode('utf-8')
-    print(f'Generated clean UsdSkel USDA: {len(usda_bytes)/1048576:.2f} MB ({nj} joints, {num_frames} frames)')
+            remap = [node_to_joint[jn] for jn in sk_g['joints']]
+            flat_ji = []
+            flat_jw = []
+            for j4, w4 in zip(jidxs, wgts):
+                s_w = sum(w4) or 1.0
+                for c in range(4):
+                    flat_ji.append(int(remap[int(j4[c])]))
+                    flat_jw.append(float(w4[c] / s_w))
 
-    w = ArkitUsdzWriter(OUT_USDZ)
-    w.add_file('ghost_salute.usda', usda_bytes)
-    for _, (fname, img_bytes) in tex_files.items():
-        w.add_file(fname, img_bytes)
-    w.close()
-    print(f'Built 64-byte aligned animated USDZ: {OUT_USDZ} ({os.path.getsize(OUT_USDZ)/1048576:.2f} MB)')
+            me = UsdGeom.Mesh.Define(st, f'/World/Ghost/Rig/Mesh{k}')
+            pts_vt = Vt.Vec3fArray([Gf.Vec3f(float(p[0]), float(p[1]), float(p[2])) for p in pts])
+            me.CreatePointsAttr(pts_vt)
+            me.CreateExtentAttr(UsdGeom.PointBased.ComputeExtent(pts_vt))
+            me.CreateFaceVertexCountsAttr(Vt.IntArray([3] * (len(idxs) // 3)))
+            me.CreateFaceVertexIndicesAttr(Vt.IntArray([int(i) for i in idxs]))
+            me.CreateNormalsAttr(Vt.Vec3fArray([Gf.Vec3f(float(n[0]), float(n[1]), float(n[2])) for n in nrms]))
+            me.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+            me.CreateSubdivisionSchemeAttr('none')
+
+            pv = UsdGeom.PrimvarsAPI(me).CreatePrimvar('st', Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
+            pv.Set(Vt.Vec2fArray([Gf.Vec2f(float(u[0]), float(1.0 - u[1])) for u in uvs]))
+
+            b = UsdSkel.BindingAPI.Apply(me.GetPrim())
+            b.CreateSkeletonRel().SetTargets([sk.GetPath()])
+            b.CreateJointIndicesPrimvar(False, 4).Set(Vt.IntArray(flat_ji))
+            b.CreateJointWeightsPrimvar(False, 4).Set(Vt.FloatArray(flat_jw))
+            b.CreateGeomBindTransformAttr(Gf.Matrix4d(1))
+
+            UsdShade.MaterialBindingAPI.Apply(me.GetPrim()).Bind(mats[mat_idx])
+            built_meshes += 1
+
+        st.GetRootLayer().Save()
+        del st
+
+        os.chdir(tmpdir)
+        ok = UsdUtils.CreateNewARKitUsdzPackage(Sdf.AssetPath('ghost_salute.usda'), OUT_USDZ)
+        os.chdir(old_cwd)
+        assert ok and os.path.exists(OUT_USDZ), 'UsdUtils.CreateNewARKitUsdzPackage failed!'
+        print(f'Built official Pixar ARKit binary USDZ: {OUT_USDZ} ({os.path.getsize(OUT_USDZ)/1048576:.2f} MB, {built_meshes} meshes, {nj} joints, {num_frames} frames)')
+    finally:
+        os.chdir(old_cwd)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 if __name__ == '__main__':
     build_salute_usdz()
