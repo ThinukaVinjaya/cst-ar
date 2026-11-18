@@ -13,7 +13,7 @@
 }
 </script>
 <style>
-:root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a;--panel:rgba(20,23,15,.86);--line:#3a4128}
+:root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a;--panel:rgba(20,23,15,.88);--line:#3a4128}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;overflow:hidden}
 body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
@@ -39,15 +39,16 @@ body.cam-ar #stage{position:fixed;inset:0;background:transparent;z-index:15}
 body.cam-ar header,body.cam-ar #note,body.cam-ar #ar-btn{display:none}
 #overlay{display:none;position:fixed;inset:0;pointer-events:none;z-index:25}
 #status{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;right:14px;text-align:center;background:var(--panel);color:var(--ink);padding:10px 14px;font-size:1.15rem;border-radius:4px;border:1px solid var(--line);transition:opacity .4s}
-#ar-controls{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:14px;right:14px;display:flex;justify-content:center;gap:10px;pointer-events:auto;flex-wrap:wrap}
-.ctrl{padding:11px 18px;font:inherit;font-size:1.1rem;font-weight:700;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+#ar-controls{position:absolute;bottom:calc(16px + env(safe-area-inset-bottom));left:12px;right:12px;display:flex;justify-content:center;gap:8px;pointer-events:auto;flex-wrap:wrap}
+.ctrl{padding:11px 15px;font:inherit;font-size:1.05rem;font-weight:700;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.ctrl.active{background:#3a4a24;border-color:var(--flare);color:#fff}
 .ctrl.primary{background:var(--flare);color:#14170f;border-color:var(--flare)}
 </style>
 </head>
 <body>
 <header>
   <h1>CST LAN Challenge</h1>
-  <p>Point your camera at the table or loot box to place Ghost.</p>
+  <p>Point your camera at the table to place Ghost right beside your prop.</p>
 </header>
 
 <div id="stage">
@@ -63,11 +64,13 @@ body.cam-ar header,body.cam-ar #note,body.cam-ar #ar-btn{display:none}
 
 <video id="cam" autoplay playsinline muted></video>
 <div id="overlay">
-  <div id="status">Point at the table</div>
+  <div id="status">Point at the table surface…</div>
   <div id="ar-controls">
     <button class="ctrl" id="scale-down" aria-label="Smaller">−</button>
     <button class="ctrl" id="scale-up" aria-label="Larger">+</button>
-    <button class="ctrl" id="recenter">Recenter</button>
+    <button class="ctrl" id="rotate-btn" aria-label="Rotate">↻ Turn</button>
+    <button class="ctrl" id="lock-btn">Lock</button>
+    <button class="ctrl" id="recenter">Fit Table</button>
     <button class="ctrl primary" id="exit">Close</button>
   </div>
 </div>
@@ -78,14 +81,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 const MODEL_URL = 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx';
-const TARGET_HEIGHT = 0.28;   // 28 cm tabletop size (set to 1.8 for life-size)
-const DIST = 0.65;            // metres in front of the camera
-const DROP = 0.30;            // metres below the camera
+const TARGET_HEIGHT = 0.28;   // 28 cm tabletop height (change to 1.8 for life-size)
+const TABLE_DROP = 0.45;      // typical distance (m) from phone down to table surface
 
 const $ = id => document.getElementById(id);
 const stage = $('stage'), arBtn = $('ar-btn'), note = $('note');
 const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBtn = $('retry');
-const camVideo = $('cam'), overlay = $('overlay'), statusEl = $('status');
+const camVideo = $('cam'), overlay = $('overlay'), statusEl = $('status'), lockBtn = $('lock-btn');
+
+// Prevent WebXR tap-to-place when pressing overlay buttons
+$('ar-controls').addEventListener('beforexrselect', e => e.preventDefault());
 
 // ---- Three.js Scene & Renderer ----
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -99,17 +104,17 @@ stage.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, stage.clientWidth / Math.max(stage.clientHeight, 1), 0.02, 50);
-camera.position.set(0, 0.26, 0.62);
+camera.position.set(0, 0.24, 0.60);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.14, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 0.25;
+controls.minDistance = 0.22;
 controls.maxDistance = 2.5;
 controls.update();
 
-// Lighting (optimized for FBX MeshPhongMaterial + PBR)
+// Lighting
 scene.add(new THREE.HemisphereLight(0xffffff, 0x555c4a, 2.0));
 const keyLight = new THREE.DirectionalLight(0xfff8ee, 2.2);
 keyLight.position.set(1.5, 3.0, 2.0);
@@ -120,11 +125,25 @@ scene.add(rimLight);
 
 // Preview-only subtle ground ring
 const previewFloor = new THREE.Group();
-const grid = new THREE.PolarGridHelper(0.32, 8, 4, 48, 0x4b5736, 0x2c3420);
-previewFloor.add(grid);
+previewFloor.add(new THREE.PolarGridHelper(0.32, 8, 4, 48, 0x4b5736, 0x2c3420));
 scene.add(previewFloor);
 
-// Model container & subtle contact shadow under feet
+// WebXR Table Placement Reticle (shows exact real table surface)
+const reticle = new THREE.Group();
+const outerRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.065, 0.085, 36).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xff6a1a, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+);
+const centerDot = new THREE.Mesh(
+  new THREE.CircleGeometry(0.015, 20).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xecebdc, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+);
+reticle.add(outerRing, centerDot);
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
+
+// Model container & subtle contact shadow under boots
 const modelRoot = new THREE.Group();
 scene.add(modelRoot);
 
@@ -133,23 +152,55 @@ function createShadowDisc() {
   c.width = c.height = 128;
   const ctx = c.getContext('2d');
   const g = ctx.createRadialGradient(64, 64, 6, 64, 64, 60);
-  g.addColorStop(0, 'rgba(0,0,0,0.45)');
+  g.addColorStop(0, 'rgba(0,0,0,0.5)');
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(c);
   const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
-  const disc = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.24), mat);
+  const disc = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
   disc.rotation.x = -Math.PI / 2;
   disc.position.y = 0.002;
   return disc;
 }
-modelRoot.add(createShadowDisc());
+const shadowDisc = createShadowDisc();
+shadowDisc.scale.set(0.22, 0.22, 1);
+modelRoot.add(shadowDisc);
 
 let mixer = null;
 let loadedModel = null;
 let modelReady = false;
 let userScale = 1.0;
+let userYawOffset = 0;
+let isLocked = false;
+
+// ---- Accurate SkinnedMesh World Bounding Box ----
+function computeExactSkinnedBox(root) {
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const v = new THREE.Vector3();
+  root.traverse(o => {
+    if (!o.isMesh || !o.geometry) return;
+    const pos = o.geometry.attributes.position;
+    if (!pos || pos.count === 0) return;
+    if (o.isSkinnedMesh && o.skeleton) {
+      o.skeleton.update();
+    }
+    const step = Math.max(1, Math.floor(pos.count / 4000));
+    for (let i = 0; i < pos.count; i += step) {
+      if (o.isSkinnedMesh && typeof o.getVertexPosition === 'function') {
+        o.getVertexPosition(i, v);
+      } else {
+        v.fromBufferAttribute(pos, i);
+      }
+      v.applyMatrix4(o.matrixWorld);
+      if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) {
+        box.expandByPoint(v);
+      }
+    }
+  });
+  return box;
+}
 
 // ---- Detect Android WebXR vs iOS/Camera AR ----
 let hasWebXR = false;
@@ -169,8 +220,8 @@ function updateReadyUI() {
   arBtn.disabled = false;
   arBtn.textContent = 'Open AR camera';
   note.textContent = hasWebXR
-    ? 'Android WebXR AR ready. Point at the table — Ghost appears straight away.'
-    : 'iOS & Mobile Camera AR ready. Allow camera & motion access when prompted.';
+    ? 'Android WebXR AR ready. Point at the table and tap to place on the exact spot.'
+    : 'iOS & Mobile Camera AR ready. Point at the table — drag on the tabletop to fit.';
 }
 
 // ---- Load FBX Directly from S3 URL ----
@@ -190,8 +241,11 @@ function loadFBX() {
     fbx => {
       if (loadedModel) modelRoot.remove(loadedModel);
       loadedModel = fbx;
+      fbx.position.set(0, 0, 0);
+      fbx.rotation.set(0, 0, 0);
+      fbx.scale.set(1, 1, 1);
 
-      // Tune materials & prevent skinned mesh frustum culling
+      // Fix materials & prevent skinned mesh clipping
       fbx.traverse(o => {
         if (o.isMesh) {
           o.frustumCulled = false;
@@ -205,27 +259,35 @@ function loadFBX() {
         }
       });
 
-      // Play embedded Salute animation
+      // Play embedded Salute animation before measuring so pose is exact
       if (fbx.animations && fbx.animations.length > 0) {
         mixer = new THREE.AnimationMixer(fbx);
         const clip = fbx.animations.find(a => /salute|mixamo/i.test(a.name)) || fbx.animations[0];
         mixer.clipAction(clip).play();
-        mixer.update(0);
+        mixer.update(0.05);
       }
 
-      // Normalize FBX scale (Mixamo cm -> metres) & align feet to y = 0
-      fbx.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(fbx);
-      const rawH = box.max.y - box.min.y;
+      // Attach first so matrixWorld is in modelRoot space (which is at origin)
+      modelRoot.position.set(0, 0, 0);
+      modelRoot.rotation.set(0, 0, 0);
+      modelRoot.scale.set(1, 1, 1);
+      modelRoot.add(fbx);
+
+      // Exact skinned bounding box -> normalize height & put boots flush on y = 0
+      const box1 = computeExactSkinnedBox(fbx);
+      const rawH = box1.max.y - box1.min.y;
       const s = (rawH > 0.001 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 0.0016;
       fbx.scale.setScalar(s);
-      fbx.updateMatrixWorld(true);
 
-      const box2 = new THREE.Box3().setFromObject(fbx);
-      const center = box2.getCenter(new THREE.Vector3());
-      fbx.position.set(-center.x, -box2.min.y, -center.z);
+      const box2 = computeExactSkinnedBox(fbx);
+      if (!box2.isEmpty()) {
+        const cx = (box2.min.x + box2.max.x) * 0.5;
+        const cz = (box2.min.z + box2.max.z) * 0.5;
+        fbx.position.set(-cx, -box2.min.y, -cz);
+        const footprint = Math.max(box2.max.x - box2.min.x, box2.max.z - box2.min.z, 0.14);
+        shadowDisc.scale.set(footprint * 1.25, footprint * 1.25, 1);
+      }
 
-      modelRoot.add(fbx);
       modelReady = true;
       bar.style.width = '100%';
       loaderEl.classList.add('hidden');
@@ -256,10 +318,15 @@ loadFBX();
 // ---- AR State Management ----
 let arMode = 'none'; // 'none' | 'webxr' | 'camera'
 let xrSession = null, hitSource = null, refSpace = null;
-let xrPlaced = false, xrSnapped = false, xrTargetY = 0;
+let xrPlaced = false, xrSurfaceLocked = false, xrStartTime = 0;
+let xrLastViewerPos = new THREE.Vector3();
+const xrReticlePos = new THREE.Vector3();
+let xrHasHit = false;
+let baseFacingYaw = 0;
 
 let camStream = null;
-let gyroActive = false, hasGyroBase = false;
+let gyroActive = false, hasGyroBase = false, camPlaced = false;
+let camTableY = -TABLE_DROP;
 const qDev = new THREE.Quaternion();
 const qYawFix = new THREE.Quaternion();
 const qCamTarget = new THREE.Quaternion();
@@ -270,43 +337,92 @@ const qBackCam = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 const devEuler = new THREE.Euler();
 const tmpVec = new THREE.Vector3();
 const tmpQuat = new THREE.Quaternion();
+const raycaster = new THREE.Raycaster();
+const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), TABLE_DROP);
+const dragHit = new THREE.Vector3();
 
-function showStatus(msg, autoHideMs = 3000) {
+function showStatus(msg, autoHideMs = 3200) {
   statusEl.textContent = msg;
   statusEl.style.opacity = '1';
   statusEl.style.display = 'block';
+  clearTimeout(showStatus._t);
   if (autoHideMs > 0) {
-    clearTimeout(showStatus._t);
     showStatus._t = setTimeout(() => { statusEl.style.opacity = '0'; }, autoHideMs);
   }
 }
 
-function applyUserScale() {
-  modelRoot.scale.setScalar(userScale);
+function updateLockUI() {
+  lockBtn.textContent = isLocked ? 'Unlock' : 'Lock';
+  lockBtn.classList.toggle('active', isLocked);
+  if (arMode === 'webxr' && isLocked) reticle.visible = false;
 }
 
-$('scale-down').onclick = () => { userScale = Math.max(0.3, userScale * 0.85); applyUserScale(); };
-$('scale-up').onclick = () => { userScale = Math.min(4.0, userScale * 1.18); applyUserScale(); };
+function applyUserTransform() {
+  modelRoot.scale.setScalar(userScale);
+  modelRoot.rotation.y = baseFacingYaw + userYawOffset;
+}
+
+$('scale-down').onclick = () => { userScale = Math.max(0.25, userScale * 0.85); applyUserTransform(); };
+$('scale-up').onclick = () => { userScale = Math.min(4.0, userScale * 1.18); applyUserTransform(); };
+$('rotate-btn').onclick = () => { userYawOffset += Math.PI / 4; applyUserTransform(); };
+lockBtn.onclick = () => {
+  isLocked = !isLocked;
+  updateLockUI();
+  showStatus(isLocked ? 'Position locked on table' : 'Unlocked — tap or drag on table to reposition', 2000);
+};
+
+// Place Ghost on exact table spot in WebXR
+function placeAtXRPoint(pos, viewerPos) {
+  modelRoot.position.copy(pos);
+  baseFacingYaw = Math.atan2(viewerPos.x - pos.x, viewerPos.z - pos.z);
+  applyUserTransform();
+  modelRoot.visible = true;
+  xrPlaced = true;
+}
+
+// Place Ghost on virtual table plane directly where the camera is pointing (iOS / Camera AR)
+function placeOnCameraTable() {
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  tablePlane.constant = -camTableY; // plane y = camTableY -> y - camTableY = 0
+  let dist = 0.65;
+  if (dir.y < -0.15) {
+    // Ray hits the horizontal table plane right at the center of the camera view!
+    dist = THREE.MathUtils.clamp(camTableY / dir.y, 0.35, 1.8);
+    modelRoot.position.set(dir.x * dist, camTableY, dir.z * dist);
+  } else {
+    // Camera is held nearly level: place slightly ahead and down on the table
+    const horiz = new THREE.Vector3(dir.x, 0, dir.z);
+    if (horiz.lengthSq() < 0.01) horiz.set(0, 0, -1);
+    horiz.normalize();
+    modelRoot.position.set(horiz.x * 0.65, camTableY, horiz.z * 0.65);
+  }
+  baseFacingYaw = Math.atan2(-modelRoot.position.x, -modelRoot.position.z);
+  applyUserTransform();
+  modelRoot.visible = true;
+  camPlaced = true;
+}
 
 $('recenter').onclick = () => {
+  isLocked = false;
+  updateLockUI();
   if (arMode === 'webxr') {
-    xrPlaced = false;
-    xrSnapped = false;
-    if (xrSession && !hitSource) {
-      xrSession.requestReferenceSpace('viewer')
-        .then(sp => xrSession.requestHitTestSource({ space: sp }))
-        .then(hs => hitSource = hs).catch(() => {});
+    if (xrHasHit) {
+      placeAtXRPoint(xrReticlePos, xrLastViewerPos);
+      xrSurfaceLocked = true;
+      showStatus('Fitted onto table surface', 1800);
+    } else {
+      xrPlaced = false;
+      xrSurfaceLocked = false;
+      xrStartTime = performance.now();
+      showStatus('Point at the table to detect surface…', 2500);
     }
-    showStatus('Recentered in front of camera', 1800);
   } else if (arMode === 'camera') {
-    hasGyroBase = false;
-    modelRoot.position.set(0, -DROP, -DIST);
-    modelRoot.rotation.set(0, 0, 0);
-    showStatus('Recentered on table', 1800);
+    placeOnCameraTable();
+    showStatus('Fitted to table center — drag to adjust', 2200);
   }
 };
 
-// ---- Mode 1: Android WebXR AR ----
+// ---- Mode 1: Android WebXR AR (Real Plane Detection + Tap-to-Place) ----
 async function startWebXR() {
   try {
     overlay.style.display = 'block';
@@ -316,17 +432,22 @@ async function startWebXR() {
     });
   } catch (e) {
     overlay.style.display = 'none';
-    // Fallback to Camera AR if WebXR session fails
     return startCameraAR();
   }
 
   arMode = 'webxr';
+  isLocked = false;
+  userYawOffset = 0;
+  updateLockUI();
   controls.enabled = false;
   previewFloor.visible = false;
   modelRoot.visible = false;
+  reticle.visible = false;
   xrPlaced = false;
-  xrSnapped = false;
+  xrSurfaceLocked = false;
+  xrHasHit = false;
   hitSource = null;
+  xrStartTime = performance.now();
 
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(xrSession);
@@ -336,12 +457,21 @@ async function startWebXR() {
     .then(hs => hitSource = hs)
     .catch(() => { hitSource = null; });
 
-  showStatus('Point at the table — Ghost appears automatically', 3000);
+  // Tap anywhere on table to place / fit exact spot!
+  xrSession.addEventListener('select', () => {
+    if (isLocked || !xrHasHit) return;
+    placeAtXRPoint(xrReticlePos, xrLastViewerPos);
+    xrSurfaceLocked = true;
+    showStatus('Placed on table • Tap elsewhere to move or tap Lock', 2200);
+  });
+
+  showStatus('Slowly point at the table to snap Ghost onto the surface', 3800);
 
   xrSession.addEventListener('end', () => {
     arMode = 'none';
     xrSession = null;
-    hitSource = null;
+    if (hitSource) { try { hitSource.cancel(); } catch (_) {} hitSource = null; }
+    reticle.visible = false;
     overlay.style.display = 'none';
     restorePreview();
   });
@@ -363,7 +493,6 @@ function onDeviceOrientation(e) {
   qDev.multiply(qScreenRot.setFromAxisAngle(zee, -orient));
 
   if (!hasGyroBase) {
-    // Align initial horizontal heading to -Z while preserving true vertical gravity (+Y)
     tmpVec.set(0, 0, -1).applyQuaternion(qDev);
     tmpVec.y = 0;
     if (tmpVec.lengthSq() > 0.001) {
@@ -374,6 +503,12 @@ function onDeviceOrientation(e) {
       qYawFix.identity();
     }
     hasGyroBase = true;
+    qCamTarget.copy(qYawFix).multiply(qDev);
+    camera.quaternion.copy(qCamTarget);
+    gyroActive = true;
+    // Place directly on the table where the user is currently aiming!
+    placeOnCameraTable();
+    return;
   }
 
   qCamTarget.copy(qYawFix).multiply(qDev);
@@ -381,7 +516,6 @@ function onDeviceOrientation(e) {
 }
 
 async function startCameraAR() {
-  // iOS 13+ requires DeviceOrientation permission inside the user tap gesture
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     try { await DeviceOrientationEvent.requestPermission(); } catch (_) {}
   }
@@ -406,27 +540,31 @@ async function startCameraAR() {
   try { await camVideo.play(); } catch (_) {}
 
   arMode = 'camera';
+  isLocked = false;
+  userYawOffset = 0;
+  updateLockUI();
   document.body.classList.add('cam-ar');
   overlay.style.display = 'block';
   controls.enabled = false;
   previewFloor.visible = false;
 
-  // Position camera at origin, place Ghost in front on the table facing the user
   gyroActive = false;
   hasGyroBase = false;
-  camera.fov = 60;
+  camPlaced = false;
+  camTableY = -TABLE_DROP;
+
+  camera.fov = 58;
   camera.position.set(0, 0, 0);
-  camera.quaternion.identity();
+  // Default gentle downward pitch in case device has no gyroscope
+  camera.rotation.set(-0.48, 0, 0);
   camera.aspect = window.innerWidth / Math.max(window.innerHeight, 1);
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 
-  modelRoot.visible = true;
-  modelRoot.position.set(0, -DROP, -DIST);
-  modelRoot.rotation.set(0, 0, 0);
+  placeOnCameraTable();
 
   window.addEventListener('deviceorientation', onDeviceOrientation, true);
-  showStatus('Drag to move • Pinch to resize • Tap Recenter anytime', 3800);
+  showStatus('Drag on the table to fit spot • Pinch to resize • Tap Fit Table', 4000);
 }
 
 function stopCameraAR() {
@@ -445,13 +583,17 @@ function stopCameraAR() {
 
 function restorePreview() {
   userScale = 1.0;
-  applyUserScale();
+  userYawOffset = 0;
+  baseFacingYaw = 0;
+  isLocked = false;
+  updateLockUI();
+  applyUserTransform();
   modelRoot.visible = true;
   modelRoot.position.set(0, 0, 0);
   modelRoot.rotation.set(0, 0, 0);
   previewFloor.visible = true;
   camera.fov = 55;
-  camera.position.set(0, 0.26, 0.62);
+  camera.position.set(0, 0.24, 0.60);
   controls.target.set(0, 0.14, 0);
   controls.enabled = true;
   controls.update();
@@ -469,41 +611,70 @@ $('exit').onclick = () => {
   else if (arMode === 'camera') stopCameraAR();
 };
 
-// ---- Touch Drag & Pinch Gestures for iOS / Camera AR ----
+// ---- Table-Plane Drag & Pinch Gestures for iOS / Camera AR ----
 const pointers = new Map();
 let lastPinchDist = 0;
+let lastPinchAngle = 0;
+
+function screenToTablePoint(clientX, clientY, outVec) {
+  const ndcX = (clientX / window.innerWidth) * 2 - 1;
+  const ndcY = -(clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
+  tablePlane.constant = -camTableY;
+  const hit = raycaster.ray.intersectPlane(tablePlane, outVec);
+  if (!hit) return false;
+  // Clamp distance so dragging near the horizon never sends Ghost miles away
+  const horizDist = Math.hypot(outVec.x, outVec.z);
+  if (horizDist > 2.5 || horizDist < 0.22) {
+    const clamped = THREE.MathUtils.clamp(horizDist, 0.22, 2.5);
+    const k = clamped / Math.max(horizDist, 0.0001);
+    outVec.x *= k;
+    outVec.z *= k;
+  }
+  outVec.y = camTableY;
+  return true;
+}
 
 renderer.domElement.addEventListener('pointerdown', e => {
-  if (arMode !== 'camera') return;
+  if (arMode !== 'camera' || isLocked) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 2) {
+  if (pointers.size === 1) {
+    // Tap directly on table to move Ghost there!
+    if (screenToTablePoint(e.clientX, e.clientY, dragHit)) {
+      modelRoot.position.copy(dragHit);
+      baseFacingYaw = Math.atan2(-dragHit.x, -dragHit.z);
+      applyUserTransform();
+    }
+  } else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     lastPinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    lastPinchAngle = Math.atan2(b.y - a.y, b.x - a.x);
   }
 });
 
 renderer.domElement.addEventListener('pointermove', e => {
-  if (arMode !== 'camera' || !pointers.has(e.pointerId)) return;
-  const prev = pointers.get(e.pointerId);
-  const dx = e.clientX - prev.x;
-  const dy = e.clientY - prev.y;
+  if (arMode !== 'camera' || isLocked || !pointers.has(e.pointerId)) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
   if (pointers.size === 1) {
-    // Move Ghost in screen-aligned horizontal/vertical axes
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-    const moveScale = 0.0014;
-    modelRoot.position.addScaledVector(right, dx * moveScale);
-    modelRoot.position.addScaledVector(up, -dy * moveScale);
+    // Slide Ghost smoothly across the horizontal table plane under the finger!
+    if (screenToTablePoint(e.clientX, e.clientY, dragHit)) {
+      modelRoot.position.lerp(dragHit, 0.55);
+      baseFacingYaw = Math.atan2(-modelRoot.position.x, -modelRoot.position.z);
+      applyUserTransform();
+    }
   } else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
     if (lastPinchDist > 0) {
-      userScale = THREE.MathUtils.clamp(userScale * (dist / lastPinchDist), 0.3, 4.0);
-      applyUserScale();
+      userScale = THREE.MathUtils.clamp(userScale * (dist / lastPinchDist), 0.25, 4.0);
     }
+    const dAngle = angle - lastPinchAngle;
+    if (Math.abs(dAngle) < 0.8) userYawOffset -= dAngle;
+    applyUserTransform();
     lastPinchDist = dist;
+    lastPinchAngle = angle;
   }
 });
 
@@ -526,56 +697,69 @@ window.addEventListener('resize', onResize);
 const clock = new THREE.Clock();
 const xrFwd = new THREE.Vector3();
 const xrUp = new THREE.Vector3();
+const xrHitMat = new THREE.Matrix4();
 
 renderer.setAnimationLoop((t, frame) => {
   const dt = Math.min(clock.getDelta(), 0.1);
   if (mixer) mixer.update(dt);
 
   if (arMode === 'webxr' && frame) {
-    if (!xrPlaced) {
-      const vp = frame.getViewerPose(refSpace);
-      if (vp) {
-        const p = vp.transform.position;
-        const o = vp.transform.orientation;
-        tmpQuat.set(o.x, o.y, o.z, o.w);
-        xrFwd.set(0, 0, -1).applyQuaternion(tmpQuat);
-        xrFwd.y = 0;
-        if (xrFwd.length() < 0.25) {
-          xrFwd.set(0, 1, 0).applyQuaternion(tmpQuat);
-          xrFwd.y = 0;
-        }
-        xrFwd.normalize();
+    const vp = frame.getViewerPose(refSpace);
+    if (vp) {
+      const p = vp.transform.position;
+      xrLastViewerPos.set(p.x, p.y, p.z);
+    }
 
-        modelRoot.position.set(p.x + xrFwd.x * DIST, p.y - DROP, p.z + xrFwd.z * DIST);
-        modelRoot.rotation.set(0, Math.atan2(-xrFwd.x, -xrFwd.z), 0); // Face the user!
-        xrTargetY = modelRoot.position.y;
-        modelRoot.visible = true;
-        xrPlaced = true;
-      }
-    } else if (hitSource && !xrSnapped) {
+    // Continuous real-table surface detection via WebXR hit-test
+    xrHasHit = false;
+    if (hitSource && !isLocked) {
       const hits = frame.getHitTestResults(hitSource);
-      const pose = hits[0] && hits[0].getPose(refSpace);
-      if (pose) {
-        const pp = pose.transform.position;
+      for (let i = 0; i < hits.length; i++) {
+        const pose = hits[i].getPose(refSpace);
+        if (!pose) continue;
         const o = pose.transform.orientation;
         tmpQuat.set(o.x, o.y, o.z, o.w);
         xrUp.set(0, 1, 0).applyQuaternion(tmpQuat);
-        if (xrUp.y > 0.9 &&
-            Math.hypot(pp.x - modelRoot.position.x, pp.z - modelRoot.position.z) < 0.6 &&
-            Math.abs(pp.y - modelRoot.position.y) < 0.8) {
-          xrTargetY = pp.y;
-          xrSnapped = true;
-          hitSource.cancel();
-          hitSource = null;
+        // Only accept horizontal table/floor surfaces
+        if (xrUp.y > 0.85) {
+          xrHitMat.fromArray(pose.transform.matrix);
+          reticle.matrix.copy(xrHitMat);
+          reticle.visible = true;
+          const pp = pose.transform.position;
+          xrReticlePos.set(pp.x, pp.y, pp.z);
+          xrHasHit = true;
+
+          // Auto-snap Ghost cleanly onto the real table the first time a surface is detected!
+          if (!xrSurfaceLocked) {
+            placeAtXRPoint(xrReticlePos, xrLastViewerPos);
+            xrSurfaceLocked = true;
+            showStatus('Snapped to table! Tap anywhere on table to move, or Lock', 3500);
+          }
+          break;
         }
       }
+      if (!xrHasHit) reticle.visible = false;
     }
-    if (xrPlaced) {
-      modelRoot.position.y += (xrTargetY - modelRoot.position.y) * Math.min(1, dt * 6);
+
+    // Fallback: if surface is featureless/dark for > 2.5s, show Ghost in front of camera until a surface is seen
+    if (!xrPlaced && vp && (performance.now() - xrStartTime > 2500)) {
+      const p = vp.transform.position;
+      const o = vp.transform.orientation;
+      tmpQuat.set(o.x, o.y, o.z, o.w);
+      xrFwd.set(0, 0, -1).applyQuaternion(tmpQuat);
+      xrFwd.y = 0;
+      if (xrFwd.length() < 0.25) {
+        xrFwd.set(0, 1, 0).applyQuaternion(tmpQuat);
+        xrFwd.y = 0;
+      }
+      xrFwd.normalize();
+      tmpVec.set(p.x + xrFwd.x * 0.65, p.y - TABLE_DROP, p.z + xrFwd.z * 0.65);
+      placeAtXRPoint(tmpVec, xrLastViewerPos);
+      showStatus('Move phone slightly over the table to snap height', 3000);
     }
   } else if (arMode === 'camera') {
     if (gyroActive) {
-      camera.quaternion.slerp(qCamTarget, Math.min(1, dt * 12));
+      camera.quaternion.slerp(qCamTarget, Math.min(1, dt * 14));
     }
   } else {
     controls.update();
