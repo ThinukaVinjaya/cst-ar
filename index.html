@@ -51,7 +51,8 @@ header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
     <button id="retry">Retry</button>
   </div>
   <button id="xr" class="ar-cta" disabled>Loading Ghost…</button>
-  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute.usdz?v=2#allowsContentScaling=0">
+  <a id="android-sv" class="ar-cta" href="#">Open AR camera</a>
+  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute.usdz?v=3#allowsContentScaling=0">
     <img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
     Open AR camera
   </a>
@@ -72,18 +73,17 @@ const MODEL_URL = 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx';
 const TARGET_HEIGHT = 0.25; // 25 cm tabletop height (set to 1.8 for life-size)
 
 const $ = id => document.getElementById(id);
-const stage = $('stage'), xrBtn = $('xr'), iosBtn = $('ios-ar'), note = $('note');
+const stage = $('stage'), xrBtn = $('xr'), androidSvBtn = $('android-sv'), iosBtn = $('ios-ar'), note = $('note');
 const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBtn = $('retry');
 const ov = $('overlay'), statusEl = $('status');
 
-// ---- Three.js Renderer & Scene (Plays FBX + Skeletal Animation Directly, Zero Conversion!) ----
+// ---- Preview Three.js Renderer & Scene (Plays S3 FBX + Skeletal Animation Directly) ----
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(stage.clientWidth, stage.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
-renderer.xr.enabled = true;
 stage.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -98,7 +98,7 @@ controls.minDistance = 0.22;
 controls.maxDistance = 2.0;
 controls.update();
 
-// Lighting
+// Preview Lighting
 scene.add(new THREE.HemisphereLight(0xffffff, 0x555c4a, 2.2));
 const keyLight = new THREE.DirectionalLight(0xfff8ee, 2.2);
 keyLight.position.set(1.5, 3.0, 2.0);
@@ -111,16 +111,7 @@ scene.add(rimLight);
 const previewFloor = new THREE.PolarGridHelper(0.28, 8, 4, 48, 0x4b5736, 0x2c3420);
 scene.add(previewFloor);
 
-// WebXR Table Scanning Ring (hidden except while scanning the table)
-const reticle = new THREE.Mesh(
-  new THREE.RingGeometry(0.06, 0.08, 36).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ color: 0xff6a1a, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
-);
-reticle.matrixAutoUpdate = false;
-reticle.visible = false;
-scene.add(reticle);
-
-// Outer AR root (placed on table) -> inner fbxWrap (handles scale/orientation/grounding without touching FBX skeleton!)
+// Outer root -> inner fbxWrap (handles scale/orientation/grounding without touching FBX skeleton!)
 const modelRoot = new THREE.Group();
 const fbxWrap = new THREE.Group();
 modelRoot.add(fbxWrap);
@@ -128,35 +119,82 @@ scene.add(modelRoot);
 
 let mixer = null;
 let loadedFbx = null;
+let activeClip = null;
+let skinnedMeshes = [];
 let modelReady = false;
 
-// ---- Detect Android WebXR vs iPhone Safari Quick Look ----
+// ---- Detect Android WebXR vs Android Scene Viewer Fallback vs iPhone Safari Quick Look ----
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/i.test(navigator.userAgent);
 
 const hasWebXR = !!(navigator.xr && await Promise.race([
   navigator.xr.isSessionSupported('immersive-ar').catch(() => false),
   new Promise(r => setTimeout(() => r(false), 2000))
 ]));
 
+// Configure Google Scene Viewer fallback URL (only shown on Android devices without WebXR)
+if (isAndroid && !hasWebXR) {
+  const glbUrl = new URL('models/ghost_salute.glb?v=3', window.location.href).href;
+  const fallbackUrl = encodeURIComponent(window.location.href);
+  androidSvBtn.href =
+    `intent://arvr.google.com/scene-viewer/1.0?file=${encodeURIComponent(glbUrl)}&mode=ar_only&resizable=false&title=Ghost+Salute` +
+    `#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${fallbackUrl};end;`;
+}
+
 function updateButtons() {
   if (hasWebXR) {
     xrBtn.style.display = 'block';
+    androidSvBtn.style.display = 'none';
     iosBtn.style.display = 'none';
     xrBtn.disabled = !modelReady;
     xrBtn.textContent = modelReady ? 'Open AR camera' : 'Loading Ghost…';
     if (modelReady) note.textContent = 'Tap Open AR camera, scan the table, then walk 360° around Ghost.';
   } else if (isIOS) {
     xrBtn.style.display = 'none';
+    androidSvBtn.style.display = 'none';
     iosBtn.style.display = 'block';
     if (modelReady) note.textContent = 'Tap Open AR camera for Apple AR Quick Look. Scan the table and walk around Ghost.';
+  } else if (isAndroid) {
+    xrBtn.style.display = 'none';
+    androidSvBtn.style.display = 'block';
+    iosBtn.style.display = 'none';
+    if (modelReady) note.textContent = 'Tap Open AR camera, scan the table, and walk 360° around Ghost.';
   } else {
     xrBtn.style.display = 'none';
+    androidSvBtn.style.display = 'none';
     iosBtn.style.display = 'none';
     if (modelReady) note.textContent = '3D animated preview active. Open on Android Chrome or iPhone Safari for AR.';
   }
 }
 updateButtons();
+
+function refreshSkeletons() {
+  if (loadedFbx) loadedFbx.updateMatrixWorld(true);
+  for (let i = 0; i < skinnedMeshes.length; i++) {
+    const m = skinnedMeshes[i];
+    if (m.skeleton) {
+      m.skeleton.update();
+      if (m.skeleton.boneTexture) m.skeleton.boneTexture.needsUpdate = true;
+    }
+  }
+}
+
+function startClipOnMixer(targetFbx, clip) {
+  if (!targetFbx || !clip) return null;
+  const m = new THREE.AnimationMixer(targetFbx);
+  const action = m.clipAction(clip);
+  action.reset();
+  action.enabled = true;
+  action.paused = false;
+  action.timeScale = 1;
+  action.setEffectiveWeight(1);
+  action.setLoop(THREE.LoopRepeat, Infinity);
+  action.play();
+  m.update(0.016);
+  refreshSkeletons();
+  return m;
+}
 
 // Compute exact world-space bounding box of posed SkinnedMeshes
 function computeExactSkinnedBox(root) {
@@ -241,9 +279,11 @@ async function loadFBXModel() {
     const fbx = fbxLoader.parse(buffer, basePath);
 
     // Keep FBX bone names & bindMatrices 100% UNTOUCHED so all skeletal animation tracks play natively!
+    skinnedMeshes = [];
     fbx.traverse(o => {
       if (!o.isMesh) return;
       o.frustumCulled = false;
+      if (o.isSkinnedMesh) skinnedMeshes.push(o);
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       mats.forEach(m => {
         if (!m) return;
@@ -259,16 +299,13 @@ async function loadFBXModel() {
     fbxWrap.scale.set(1, 1, 1);
     fbxWrap.add(fbx);
 
-    // Start ALL embedded FBX animations directly on fbx via AnimationMixer!
+    // Start embedded FBX Salute animation directly on fbx via AnimationMixer
     if (fbx.animations && fbx.animations.length > 0) {
-      mixer = new THREE.AnimationMixer(fbx);
-      const clip = fbx.animations.find(a => a.tracks && a.tracks.length > 0) || fbx.animations[0];
-      const action = mixer.clipAction(clip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.play();
-      mixer.update(0.05);
-      console.log('Playing FBX animation:', clip.name, 'tracks:', clip.tracks.length, 'duration:', clip.duration.toFixed(2) + 's');
+      activeClip = fbx.animations.find(a => a.tracks && a.tracks.length > 0) || fbx.animations[0];
+      mixer = startClipOnMixer(fbx, activeClip);
+      console.log('Playing FBX animation:', activeClip.name, 'tracks:', activeClip.tracks.length, 'duration:', activeClip.duration.toFixed(2) + 's');
     } else {
+      activeClip = null;
       mixer = null;
       console.warn('No animation clips found inside FBX.');
     }
@@ -311,19 +348,34 @@ async function loadFBXModel() {
 retryBtn.onclick = loadFBXModel;
 loadFBXModel();
 
-// ---- Android Chrome WebXR (True 6-DoF ARCore Table Search & World Anchor) ----
-let xrSession = null, hitSource = null, refSpace = null;
-let xrPlaced = false, stableFrames = 0, worldAnchor = null;
+// ---- Preview Render & Animation Loop ----
+let lastPreviewTick = performance.now();
+function previewLoop() {
+  const now = performance.now();
+  const dt = Math.min(Math.max((now - lastPreviewTick) / 1000, 0.001), 0.1);
+  lastPreviewTick = now;
+  if (mixer) {
+    mixer.update(dt);
+    refreshSkeletons();
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(previewLoop);
+
+// ---- Android Chrome WebXR (Dedicated WebXR Renderer + Fresh AnimationMixer + 6-DoF Table Anchor) ----
+let xrSession = null;
 
 xrBtn.onclick = async () => {
-  if (!modelReady) return;
+  if (!modelReady || !loadedFbx || xrSession) return;
 
   ov.style.display = 'block';
   statusEl.style.display = 'block';
   statusEl.textContent = 'Move phone slowly to scan the table…';
 
+  let session;
   try {
-    xrSession = await navigator.xr.requestSession('immersive-ar', {
+    session = await navigator.xr.requestSession('immersive-ar', {
       optionalFeatures: ['hit-test', 'dom-overlay', 'anchors'],
       domOverlay: { root: ov }
     });
@@ -332,41 +384,196 @@ xrBtn.onclick = async () => {
     note.textContent = 'Could not start AR. Allow camera access and try again.';
     return;
   }
+  xrSession = session;
 
+  // Pause preview loop & preview mixer so WebXR has exclusive control of loadedFbx + GPU
+  renderer.setAnimationLoop(null);
   controls.enabled = false;
-  previewFloor.visible = false;
-  modelRoot.visible = false;
-  reticle.visible = false;
-  xrPlaced = false;
-  stableFrames = 0;
-  worldAnchor = null;
-  hitSource = null;
+  if (mixer) {
+    mixer.stopAllAction();
+    mixer.uncacheRoot(loadedFbx);
+    mixer = null;
+  }
 
-  renderer.xr.setReferenceSpaceType('local');
-  await renderer.xr.setSession(xrSession);
-  refSpace = renderer.xr.getReferenceSpace();
-  lastTick = performance.now();
+  // Dedicated high-performance WebXR renderer (full viewport, pixelRatio=1, framebufferScaleFactor=0.8)
+  const arRenderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'high-performance' });
+  arRenderer.setPixelRatio(1);
+  arRenderer.xr.setFramebufferScaleFactor(0.8);
+  arRenderer.setSize(window.innerWidth, window.innerHeight);
+  arRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  arRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  arRenderer.toneMappingExposure = 1.1;
+  arRenderer.xr.enabled = true;
+  Object.assign(arRenderer.domElement.style, { position: 'fixed', inset: '0', zIndex: '0' });
+  document.body.appendChild(arRenderer.domElement);
 
-  xrSession.requestReferenceSpace('viewer')
-    .then(sp => xrSession.requestHitTestSource({ space: sp }))
-    .then(hs => { hitSource = hs; })
-    .catch(() => { hitSource = null; });
+  const arScene = new THREE.Scene();
+  const arCamera = new THREE.PerspectiveCamera();
+  arScene.add(new THREE.HemisphereLight(0xffffff, 0x555c4a, 2.4));
+  const arKey = new THREE.DirectionalLight(0xfff8ee, 2.2);
+  arKey.position.set(1.5, 3.0, 2.0);
+  arScene.add(arKey);
+  const arRim = new THREE.DirectionalLight(0xcce0ff, 0.9);
+  arRim.position.set(-1.5, 1.5, -2.0);
+  arScene.add(arRim);
 
-  xrSession.addEventListener('end', () => {
+  const arReticle = new THREE.Mesh(
+    new THREE.RingGeometry(0.06, 0.08, 36).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xff6a1a, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+  );
+  arReticle.matrixAutoUpdate = false;
+  arReticle.visible = false;
+  arScene.add(arReticle);
+
+  // Move animated fbxWrap into arModelRoot and bind a fresh AnimationMixer directly inside the XR session
+  const arModelRoot = new THREE.Group();
+  arModelRoot.visible = false;
+  arModelRoot.add(fbxWrap);
+  arScene.add(arModelRoot);
+
+  const arMixer = startClipOnMixer(loadedFbx, activeClip);
+
+  let hitSource = null;
+  let refSpace = null;
+  let xrPlaced = false;
+  let stableFrames = 0;
+  let worldAnchor = null;
+
+  let cleanedUp = false;
+  function cleanupAR() {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    arRenderer.setAnimationLoop(null);
     if (hitSource) { try { hitSource.cancel(); } catch (_) {} hitSource = null; }
+    if (arMixer) {
+      arMixer.stopAllAction();
+      arMixer.uncacheRoot(loadedFbx);
+    }
+    arRenderer.domElement.remove();
+    arRenderer.dispose();
+
     xrSession = null;
-    worldAnchor = null;
-    reticle.visible = false;
     ov.style.display = 'none';
+
+    // Restore fbxWrap back to preview scene and resume preview Salute animation
+    modelRoot.add(fbxWrap);
     modelRoot.visible = true;
     modelRoot.position.set(0, 0, 0);
     modelRoot.rotation.set(0, 0, 0);
-    previewFloor.visible = true;
+    mixer = startClipOnMixer(loadedFbx, activeClip);
+
     camera.position.set(0, 0.20, 0.56);
     controls.target.set(0, 0.12, 0);
     controls.enabled = true;
     controls.update();
     onResize();
+    lastPreviewTick = performance.now();
+    renderer.setAnimationLoop(previewLoop);
+  }
+
+  session.addEventListener('end', cleanupAR);
+
+  try {
+    arRenderer.xr.setReferenceSpaceType('local');
+    await arRenderer.xr.setSession(session);
+    refSpace = arRenderer.xr.getReferenceSpace();
+  } catch (e) {
+    try { await session.end(); } catch (_) {}
+    cleanupAR();
+    note.textContent = 'Could not attach WebXR session. Try again.';
+    return;
+  }
+
+  session.requestReferenceSpace('viewer')
+    .then(sp => session.requestHitTestSource({ space: sp }))
+    .then(hs => { hitSource = hs; })
+    .catch(() => { hitSource = null; });
+
+  const q = new THREE.Quaternion();
+  const upVec = new THREE.Vector3();
+  const hitMat = new THREE.Matrix4();
+  const lastHitPos = new THREE.Vector3();
+  let lastXrTime = null;
+
+  // Start WebXR animation loop AFTER setSession so XRFrame drives every animation step cleanly
+  arRenderer.setAnimationLoop((t, frame) => {
+    const now = (typeof t === 'number' && isFinite(t)) ? t : performance.now();
+    let dt = lastXrTime === null ? 0.016 : (now - lastXrTime) / 1000;
+    lastXrTime = now;
+    if (!isFinite(dt) || dt <= 0) dt = 0.016;
+    if (dt > 0.1) dt = 0.1;
+
+    if (arMixer) {
+      arMixer.update(dt);
+      refreshSkeletons();
+    }
+
+    if (frame) {
+      if (!xrPlaced && hitSource) {
+        const hits = frame.getHitTestResults(hitSource);
+        let foundTable = false;
+
+        for (let i = 0; i < hits.length; i++) {
+          const hit = hits[i];
+          const pose = hit.getPose(refSpace);
+          if (!pose) continue;
+
+          const o = pose.transform.orientation;
+          q.set(o.x, o.y, o.z, o.w);
+          upVec.set(0, 1, 0).applyQuaternion(q);
+
+          if (upVec.y > 0.90) {
+            foundTable = true;
+            hitMat.fromArray(pose.transform.matrix);
+            arReticle.matrix.copy(hitMat);
+            arReticle.visible = true;
+
+            const pp = pose.transform.position;
+            if (stableFrames === 0 || Math.hypot(pp.x - lastHitPos.x, pp.y - lastHitPos.y, pp.z - lastHitPos.z) < 0.05) {
+              stableFrames++;
+            } else {
+              stableFrames = 1;
+            }
+            lastHitPos.set(pp.x, pp.y, pp.z);
+
+            if (stableFrames >= 6) {
+              const vp = frame.getViewerPose(refSpace);
+              arModelRoot.position.set(pp.x, pp.y, pp.z);
+              if (vp) {
+                const p = vp.transform.position;
+                arModelRoot.rotation.set(0, Math.atan2(p.x - pp.x, p.z - pp.z), 0);
+              }
+              arModelRoot.visible = true;
+              arReticle.visible = false;
+              xrPlaced = true;
+
+              if (typeof hit.createAnchor === 'function') {
+                hit.createAnchor().then(a => { worldAnchor = a; }).catch(() => {});
+              }
+
+              hitSource.cancel();
+              hitSource = null;
+
+              statusEl.textContent = 'Table found! Walk 360° around Ghost.';
+              setTimeout(() => { statusEl.style.display = 'none'; }, 2500);
+            }
+            break;
+          }
+        }
+        if (!foundTable) {
+          arReticle.visible = false;
+          stableFrames = 0;
+        }
+      } else if (xrPlaced && worldAnchor && frame.trackedAnchors && frame.trackedAnchors.has(worldAnchor)) {
+        const anchorPose = frame.getPose(worldAnchor.anchorSpace, refSpace);
+        if (anchorPose) {
+          const ap = anchorPose.transform.position;
+          arModelRoot.position.set(ap.x, ap.y, ap.z);
+        }
+      }
+    }
+
+    arRenderer.render(arScene, arCamera);
   });
 };
 
@@ -381,94 +588,6 @@ function onResize() {
   renderer.setSize(w, h);
 }
 window.addEventListener('resize', onResize);
-
-// ---- Main Render & Animation Loop (Preview + WebXR AR) ----
-let lastTick = performance.now();
-const q = new THREE.Quaternion();
-const upVec = new THREE.Vector3();
-const hitMat = new THREE.Matrix4();
-const lastHitPos = new THREE.Vector3();
-
-renderer.setAnimationLoop((t, frame) => {
-  const now = performance.now();
-  const dt = Math.min(Math.max((now - lastTick) / 1000, 0), 0.1);
-  lastTick = now;
-  if (mixer) {
-    mixer.update(dt);
-    if (loadedFbx) {
-      loadedFbx.updateMatrixWorld(true);
-    }
-  }
-
-  if (xrSession && frame) {
-    if (!xrPlaced && hitSource) {
-      const hits = frame.getHitTestResults(hitSource);
-      let foundTable = false;
-
-      for (let i = 0; i < hits.length; i++) {
-        const hit = hits[i];
-        const pose = hit.getPose(refSpace);
-        if (!pose) continue;
-
-        const o = pose.transform.orientation;
-        q.set(o.x, o.y, o.z, o.w);
-        upVec.set(0, 1, 0).applyQuaternion(q);
-
-        if (upVec.y > 0.90) {
-          foundTable = true;
-          hitMat.fromArray(pose.transform.matrix);
-          reticle.matrix.copy(hitMat);
-          reticle.visible = true;
-
-          const pp = pose.transform.position;
-          if (stableFrames === 0 || Math.hypot(pp.x - lastHitPos.x, pp.y - lastHitPos.y, pp.z - lastHitPos.z) < 0.05) {
-            stableFrames++;
-          } else {
-            stableFrames = 1;
-          }
-          lastHitPos.set(pp.x, pp.y, pp.z);
-
-          if (stableFrames >= 6) {
-            const vp = frame.getViewerPose(refSpace);
-            modelRoot.position.set(pp.x, pp.y, pp.z);
-            if (vp) {
-              const p = vp.transform.position;
-              modelRoot.rotation.set(0, Math.atan2(p.x - pp.x, p.z - pp.z), 0);
-            }
-            modelRoot.visible = true;
-            reticle.visible = false;
-            xrPlaced = true;
-
-            if (typeof hit.createAnchor === 'function') {
-              hit.createAnchor().then(a => { worldAnchor = a; }).catch(() => {});
-            }
-
-            hitSource.cancel();
-            hitSource = null;
-
-            statusEl.textContent = 'Table found! Walk 360° around Ghost.';
-            setTimeout(() => { statusEl.style.display = 'none'; }, 2500);
-          }
-          break;
-        }
-      }
-      if (!foundTable) {
-        reticle.visible = false;
-        stableFrames = 0;
-      }
-    } else if (xrPlaced && worldAnchor && frame.trackedAnchors && frame.trackedAnchors.has(worldAnchor)) {
-      const anchorPose = frame.getPose(worldAnchor.anchorSpace, refSpace);
-      if (anchorPose) {
-        const ap = anchorPose.transform.position;
-        modelRoot.position.set(ap.x, ap.y, ap.z);
-      }
-    }
-  } else {
-    controls.update();
-  }
-
-  renderer.render(scene, camera);
-});
 </script>
 </body>
 </html>

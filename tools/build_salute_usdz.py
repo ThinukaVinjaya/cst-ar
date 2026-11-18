@@ -146,7 +146,7 @@ def build_salute_usdz():
             pji = joint_parent_local[ji]
             bind_mats.append(mm_col(bind_mats[pji], rm) if pji >= 0 else rm)
 
-    # 2. Extract Salute animation frames
+    # 2. Extract Salute animation frames & enforce quaternion hemisphere continuity
     anim = g['animations'][0]
     anim_t = {}
     anim_r = {}
@@ -159,7 +159,17 @@ def build_salute_usdz():
         if path == 'translation':
             anim_t[ni] = vals
         elif path == 'rotation':
-            anim_r[ni] = vals
+            # Normalize & ensure smooth hemisphere continuity across consecutive frames
+            clean = []
+            prev = None
+            for q in vals:
+                l = math.hypot(q[0], q[1], q[2], q[3]) or 1.0
+                q = [q[0]/l, q[1]/l, q[2]/l, q[3]/l]
+                if prev is not None and (prev[0]*q[0] + prev[1]*q[1] + prev[2]*q[2] + prev[3]*q[3]) < 0:
+                    q = [-q[0], -q[1], -q[2], -q[3]]
+                clean.append(q)
+                prev = q
+            anim_r[ni] = clean
 
     # 3. Extract textures
     tex_files = {}
@@ -170,7 +180,7 @@ def build_salute_usdz():
         fname = f'textures/t{i}.{ext}'
         tex_files[i] = (fname, buf[off:off + bv['byteLength']])
 
-    # 4. Build Apple RealityKit-compliant UsdSkel USDA
+    # 4. Build strict OpenUSD / Apple RealityKit-compliant UsdSkel USDA (NO trailing commas!)
     L = []
     L.append('#usda 1.0')
     L.append('(')
@@ -182,13 +192,13 @@ def build_salute_usdz():
     L.append('    framesPerSecond = 24')
     L.append('    timeCodesPerSecond = 24')
     L.append('    customLayerData = {')
-    L.append('        bool autoPlay = 1')
+    L.append('        bool autoPlay = true')
     L.append('        string playbackMode = "loop"')
     L.append('    }')
     L.append(')')
     L.append('')
     L.append('def Xform "World" (')
-    L.append('    apiSchemas = ["Preliminary_AnchoringAPI"]')
+    L.append('    prepend apiSchemas = ["Preliminary_AnchoringAPI"]')
     L.append(')')
     L.append('{')
     L.append('    token preliminary:anchoring:type = "plane"')
@@ -246,13 +256,42 @@ def build_salute_usdz():
     joints_tok_str = ', '.join(f'"{p}"' for p in joint_paths)
     ones = ', '.join('(1, 1, 1)' for _ in range(nj))
 
-    # SkelRoot containing Skeleton + nested SkelAnimation + 12 Skinned Meshes
+    # Top-level SkelAnimation at /World/Anim (matching proven Apple AR Quick Look UsdSkel layout)
+    L.append('    def SkelAnimation "Anim"')
+    L.append('    {')
+    L.append(f'        uniform token[] joints = [{joints_tok_str}]')
+    L.append('        float3[] translations.timeSamples = {')
+    for f_idx in range(num_frames):
+        ts = []
+        for jn in joint_nodes:
+            v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0, 0, 0])
+            ts.append(f'({v[0]:.5f}, {v[1]:.5f}, {v[2]:.5f})')
+        comma = ',' if f_idx < num_frames - 1 else ''
+        L.append(f'            {f_idx}: [{", ".join(ts)}]{comma}')
+    L.append('        }')
+    L.append('        quatf[] rotations.timeSamples = {')
+    for f_idx in range(num_frames):
+        rs = []
+        for jn in joint_nodes:
+            q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0, 0, 0, 1])
+            rs.append(f'({q[3]:.5f}, {q[0]:.5f}, {q[1]:.5f}, {q[2]:.5f})')
+        comma = ',' if f_idx < num_frames - 1 else ''
+        L.append(f'            {f_idx}: [{", ".join(rs)}]{comma}')
+    L.append('        }')
+    L.append('        half3[] scales.timeSamples = {')
+    for f_idx in range(num_frames):
+        comma = ',' if f_idx < num_frames - 1 else ''
+        L.append(f'            {f_idx}: [{ones}]{comma}')
+    L.append('        }')
+    L.append('    }')
+    L.append('')
+
+    # SkelRoot containing Skeleton (pointing to /World/Anim) + 12 Skinned Meshes
     L.append('    def SkelRoot "Rig" (')
     L.append('        prepend apiSchemas = ["SkelBindingAPI"]')
     L.append('    )')
     L.append('    {')
     L.append('        rel skel:skeleton = </World/Rig/Skel>')
-    L.append('        rel skel:animationSource = </World/Rig/Skel/Anim>')
     L.append('')
     L.append('        def Skeleton "Skel" (')
     L.append('            prepend apiSchemas = ["SkelBindingAPI"]')
@@ -261,32 +300,7 @@ def build_salute_usdz():
     L.append(f'            uniform token[] joints = [{joints_tok_str}]')
     L.append('            uniform matrix4d[] bindTransforms = [' + ', '.join(fmt_mat4_usd(m) for m in bind_mats) + ']')
     L.append('            uniform matrix4d[] restTransforms = [' + ', '.join(fmt_mat4_usd(m) for m in rest_mats) + ']')
-    L.append('            rel skel:animationSource = </World/Rig/Skel/Anim>')
-    L.append('')
-    L.append('            def SkelAnimation "Anim"')
-    L.append('            {')
-    L.append(f'                uniform token[] joints = [{joints_tok_str}]')
-    L.append('                float3[] translations.timeSamples = {')
-    for f_idx in range(num_frames):
-        ts = []
-        for jn in joint_nodes:
-            v = anim_t[jn][f_idx] if jn in anim_t else nodes[jn].get('translation', [0, 0, 0])
-            ts.append(f'({v[0]:.5f}, {v[1]:.5f}, {v[2]:.5f})')
-        L.append(f'                    {f_idx}: [{", ".join(ts)}],')
-    L.append('                }')
-    L.append('                quatf[] rotations.timeSamples = {')
-    for f_idx in range(num_frames):
-        rs = []
-        for jn in joint_nodes:
-            q = anim_r[jn][f_idx] if jn in anim_r else nodes[jn].get('rotation', [0, 0, 0, 1])
-            rs.append(f'({q[3]:.5f}, {q[0]:.5f}, {q[1]:.5f}, {q[2]:.5f})')
-        L.append(f'                    {f_idx}: [{", ".join(rs)}],')
-    L.append('                }')
-    L.append('                half3[] scales.timeSamples = {')
-    for f_idx in range(num_frames):
-        L.append(f'                    {f_idx}: [{ones}],')
-    L.append('                }')
-    L.append('            }')
+    L.append('            rel skel:animationSource = </World/Anim>')
     L.append('        }')
 
     mesh_nodes = [n for n in nodes if n.get('mesh') is not None]
@@ -350,7 +364,7 @@ def build_salute_usdz():
     L.append('}')
 
     usda_bytes = '\n'.join(L).encode('utf-8')
-    print(f'Generated UsdSkel USDA: {len(usda_bytes)/1048576:.2f} MB ({nj} joints, {num_frames} frames)')
+    print(f'Generated clean UsdSkel USDA: {len(usda_bytes)/1048576:.2f} MB ({nj} joints, {num_frames} frames)')
 
     w = ArkitUsdzWriter(OUT_USDZ)
     w.add_file('ghost_salute.usda', usda_bytes)
