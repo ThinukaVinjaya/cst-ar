@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CST LAN Challenge – Ghost AR</title>
 <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"}}</script>
 <style>
 :root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a}
 *{box-sizing:border-box}
@@ -16,11 +16,11 @@ h1{margin:0;font-size:2.3rem;line-height:1}
 header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
 #viewer-container{position:relative;flex:1;min-height:0;width:100%;display:flex}
 model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);--poster-color:transparent}
-#loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:rgba(20,23,15,.78);z-index:4}
+#loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:rgba(20,23,15,.82);z-index:4}
 #loader.hidden{display:none}
 .bar-wrap{width:min(260px,78%);height:8px;background:#262c1c;border:1px solid #3a4128;border-radius:4px;overflow:hidden}
 #bar{height:100%;width:0%;background:var(--flare);transition:width .15s linear}
-#load-text{font-size:1.15rem;color:var(--ink)}
+#load-text{font-size:1.15rem;color:var(--ink);max-width:340px}
 #retry{display:none;padding:10px 22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.15rem;font-weight:700;border-radius:4px;cursor:pointer}
 #ar{position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;cursor:pointer;border-radius:4px;z-index:3}
 #ar:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
@@ -92,6 +92,88 @@ if (hasWebXR) {
   note.textContent = 'Tap Open AR camera. Scan the table to lock Ghost in place, then walk around him.';
 }
 
+// Convert FBX MeshPhong/Lambert materials to PBR MeshStandardMaterial (required for clean GLB/USDZ export)
+function toStandardMaterial(m) {
+  if (!m) return new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.75 });
+  if (m.isMeshStandardMaterial) {
+    if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
+    return m;
+  }
+  const std = new THREE.MeshStandardMaterial({
+    name: m.name || '',
+    color: m.color ? m.color.clone() : new THREE.Color(0xffffff),
+    map: m.map || null,
+    normalMap: m.normalMap || null,
+    bumpMap: m.bumpMap || null,
+    emissive: m.emissive ? m.emissive.clone() : new THREE.Color(0x000000),
+    emissiveMap: m.emissiveMap || null,
+    roughness: 0.72,
+    metalness: 0.12,
+    transparent: !!(m.transparent && m.opacity < 0.99),
+    opacity: m.opacity === 0 ? 1 : (m.opacity ?? 1),
+    alphaTest: m.alphaTest || 0,
+    side: m.side ?? THREE.FrontSide
+  });
+  if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
+  if (std.emissiveMap) std.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+  return std;
+}
+
+// Wait for embedded FBX blob-URL textures to decode before exporting to GLB
+async function waitForAndCleanTextures(root) {
+  const promises = [];
+  const seen = new Set();
+  const texKeys = ['map', 'normalMap', 'bumpMap', 'emissiveMap', 'roughnessMap', 'metalnessMap'];
+
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    mats.forEach(m => {
+      if (!m) return;
+      texKeys.forEach(key => {
+        const tex = m[key];
+        const img = tex && tex.image;
+        if (!img || seen.has(img)) return;
+        seen.add(img);
+        if (img instanceof HTMLImageElement && (!img.complete || img.naturalWidth === 0)) {
+          promises.push(new Promise(res => {
+            const done = () => res();
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+            setTimeout(done, 5000);
+          }));
+        }
+      });
+    });
+  });
+
+  if (promises.length) await Promise.all(promises);
+
+  // Strip any unreadable/empty textures so GLTFExporter never fails on drawImage()
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    mats.forEach(m => {
+      if (!m) return;
+      texKeys.forEach(key => {
+        const tex = m[key];
+        if (!tex) return;
+        const img = tex.image;
+        const okImg = img && (
+          (img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0) ||
+          (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) ||
+          (img instanceof HTMLCanvasElement && img.width > 0) ||
+          (img.width > 0 && img.height > 0 && img.data)
+        );
+        if (!okImg) {
+          m[key] = null;
+          m.needsUpdate = true;
+        }
+      });
+    });
+  });
+}
+
 // Compute exact world-space bounding box of an animated SkinnedMesh so boots touch y = 0
 function computeExactSkinnedBox(root) {
   root.updateMatrixWorld(true);
@@ -101,12 +183,18 @@ function computeExactSkinnedBox(root) {
     if (!o.isMesh || !o.geometry) return;
     const pos = o.geometry.attributes.position;
     if (!pos || pos.count === 0) return;
-    if (o.isSkinnedMesh && o.skeleton) o.skeleton.update();
+    if (o.isSkinnedMesh && o.skeleton) {
+      try { o.skeleton.update(); } catch (_) {}
+    }
     const step = Math.max(1, Math.floor(pos.count / 4000));
     for (let i = 0; i < pos.count; i += step) {
-      if (o.isSkinnedMesh && typeof o.getVertexPosition === 'function') {
-        o.getVertexPosition(i, v);
-      } else {
+      try {
+        if (o.isSkinnedMesh && typeof o.getVertexPosition === 'function') {
+          o.getVertexPosition(i, v);
+        } else {
+          v.fromBufferAttribute(pos, i);
+        }
+      } catch (_) {
         v.fromBufferAttribute(pos, i);
       }
       v.applyMatrix4(o.matrixWorld);
@@ -116,6 +204,29 @@ function computeExactSkinnedBox(root) {
   return box;
 }
 
+// Fetch FBX as ArrayBuffer with progress, then parse directly with FBXLoader.parse()
+async function fetchArrayBufferWithProgress(url, onProgress) {
+  const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching model`);
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!res.body) return await res.arrayBuffer();
+
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.byteLength;
+    onProgress(loaded, total);
+  }
+  const out = new Uint8Array(loaded);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
+  return out.buffer;
+}
+
 let ghostGroup = null;
 let ghostAnims = [];
 let glbBlobUrl = null;
@@ -123,45 +234,40 @@ let glbBlobUrl = null;
 async function loadFBXModel() {
   loaderEl.classList.remove('hidden');
   retryBtn.style.display = 'none';
-  bar.style.width = '8%';
-  loadText.textContent = 'Loading Ghost Salute…';
+  bar.style.width = '5%';
+  loadText.textContent = 'Downloading Ghost Salute…';
   if (hasWebXR) { xrBtn.disabled = true; xrBtn.textContent = 'Loading Ghost…'; }
 
-  const fbxLoader = new FBXLoader();
-  fbxLoader.setCrossOrigin('anonymous');
-
   try {
-    const fbx = await new Promise((resolve, reject) => {
-      fbxLoader.load(
-        MODEL_URL,
-        resolve,
-        xhr => {
-          if (xhr.lengthComputable && xhr.total > 0) {
-            const pct = Math.min(92, Math.round((xhr.loaded / xhr.total) * 92));
-            bar.style.width = pct + '%';
-            loadText.textContent = `Loading Ghost Salute… ${pct}%`;
-          } else if (xhr.loaded > 0) {
-            bar.style.width = '50%';
-            loadText.textContent = `Loading Ghost Salute… ${(xhr.loaded / 1048576).toFixed(1)} MB`;
-          }
-        },
-        reject
-      );
-    });
-
-    // Tune FBX materials and prevent skinned mesh frustum culling
-    fbx.traverse(o => {
-      if (o.isMesh) {
-        o.frustumCulled = false;
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach(m => {
-          if (!m) return;
-          if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
-          if (m.opacity === 0) m.opacity = 1;
-          if (m.shininess !== undefined) m.shininess = Math.min(m.shininess, 28);
-        });
+    const buffer = await fetchArrayBufferWithProgress(MODEL_URL, (loaded, total) => {
+      if (total > 0) {
+        const pct = Math.min(88, Math.round((loaded / total) * 88));
+        bar.style.width = pct + '%';
+        loadText.textContent = `Downloading Ghost Salute… ${pct}% (${(loaded / 1048576).toFixed(1)} MB)`;
+      } else {
+        bar.style.width = '45%';
+        loadText.textContent = `Downloading Ghost Salute… ${(loaded / 1048576).toFixed(1)} MB`;
       }
     });
+
+    loadText.textContent = 'Parsing 3D model…';
+    bar.style.width = '90%';
+    await new Promise(r => setTimeout(r, 20)); // allow UI repaint
+
+    const fbxLoader = new FBXLoader();
+    const basePath = MODEL_URL.substring(0, MODEL_URL.lastIndexOf('/') + 1);
+    const fbx = fbxLoader.parse(buffer, basePath);
+
+    // Upgrade materials to PBR and prevent skinned mesh frustum culling
+    fbx.traverse(o => {
+      if (!o.isMesh) return;
+      o.frustumCulled = false;
+      o.material = Array.isArray(o.material)
+        ? o.material.map(toStandardMaterial)
+        : toStandardMaterial(o.material);
+    });
+
+    await waitForAndCleanTextures(fbx);
 
     // Pose on first animation frame so exact feet height is measured accurately
     ghostAnims = fbx.animations || [];
@@ -188,34 +294,51 @@ async function loadFBXModel() {
       fbx.position.set(-cx, -box2.min.y, -cz);
     }
 
-    // Convert loaded FBX -> in-memory GLB for <model-viewer> (3D preview + iOS AR Quick Look + Android Scene Viewer)
-    loadText.textContent = 'Preparing AR model…';
-    bar.style.width = '96%';
-    const exporter = new GLTFExporter();
-    let glbBuffer;
-    try {
-      glbBuffer = await exporter.parseAsync(ghostGroup, { binary: true, animations: ghostAnims });
-    } catch (_) {
-      glbBuffer = await exporter.parseAsync(ghostGroup, { binary: true });
-    }
-
-    if (glbBlobUrl) URL.revokeObjectURL(glbBlobUrl);
-    glbBlobUrl = URL.createObjectURL(new Blob([glbBuffer], { type: 'model/gltf-binary' }));
-    if (IOS_USDZ_URL) mv.setAttribute('ios-src', IOS_USDZ_URL);
-    mv.src = glbBlobUrl;
-
-    bar.style.width = '100%';
-    loaderEl.classList.add('hidden');
+    // Android WebXR is already 100% ready! Enable button immediately.
     if (hasWebXR) {
       xrBtn.disabled = false;
       xrBtn.textContent = 'Open AR camera';
     }
+
+    // Export in-memory GLB for <model-viewer> (3D preview + iOS AR Quick Look + Android Scene Viewer)
+    loadText.textContent = 'Preparing AR preview…';
+    bar.style.width = '95%';
+    await new Promise(r => setTimeout(r, 20));
+
+    try {
+      const exporter = new GLTFExporter();
+      let glbBuffer;
+      try {
+        glbBuffer = await exporter.parseAsync(ghostGroup, {
+          binary: true,
+          maxTextureSize: 1024,
+          animations: ghostAnims
+        });
+      } catch (animErr) {
+        console.warn('GLTF export with animations failed, retrying without animations:', animErr);
+        glbBuffer = await exporter.parseAsync(ghostGroup, {
+          binary: true,
+          maxTextureSize: 1024
+        });
+      }
+
+      if (glbBlobUrl) URL.revokeObjectURL(glbBlobUrl);
+      glbBlobUrl = URL.createObjectURL(new Blob([glbBuffer], { type: 'model/gltf-binary' }));
+      if (IOS_USDZ_URL) mv.setAttribute('ios-src', IOS_USDZ_URL);
+      mv.src = glbBlobUrl;
+    } catch (expErr) {
+      console.error('GLTFExporter error:', expErr);
+      if (!hasWebXR) throw new Error('Preview conversion failed: ' + (expErr.message || expErr));
+    }
+
+    bar.style.width = '100%';
+    loaderEl.classList.add('hidden');
   } catch (err) {
     console.error('Model load error:', err);
-    loadText.textContent = 'Could not load model from S3. Check internet connection or S3 CORS settings.';
+    loadText.textContent = 'Could not load model: ' + (err && err.message ? err.message : 'Network/parse error');
     bar.style.width = '0%';
     retryBtn.style.display = 'inline-block';
-    if (hasWebXR) xrBtn.textContent = 'Model unavailable';
+    if (hasWebXR && !ghostGroup) xrBtn.textContent = 'Model unavailable';
   }
 }
 
