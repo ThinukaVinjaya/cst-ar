@@ -108,6 +108,15 @@ def main():
         if 'translation' in n:
             n['translation'] = [v * K for v in n['translation']]
 
+    # Zero all non-bone mesh ancestor nodes (0..23) so Three.js SkinnedMesh bindMatrix is pure Identity (fixes 90-deg face-down bug!)
+    for i in range(24):
+        n = g['nodes'][i]
+        n['translation'] = [0.0, 0.0, 0.0]
+        n['rotation'] = [0.0, 0.0, 0.0, 1.0]
+        n['scale'] = [1.0, 1.0, 1.0]
+    for sk in g.get('skins', []):
+        sk['skeleton'] = 24
+
     # Fix Hips rest translation from Z-up (0,0,0.0099*K) to Y-up (0,0.00987*K,0) so static pose is upright
     for n in g['nodes']:
         if n.get('name') == 'mixamorig:Hips':

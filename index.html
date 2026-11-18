@@ -33,7 +33,7 @@ model-viewer{flex:1;min-height:0;width:100%;background:radial-gradient(circle at
   <p>Tap Open AR camera, scan the table, and walk around Ghost.</p>
 </header>
 <div id="viewer-container">
-  <model-viewer id="mv" src="models/ghost_salute.glb" alt="Ghost Salute AR" autoplay animation-name="Salute"
+  <model-viewer id="mv" src="models/ghost_salute.glb" ios-src="models/ghost_salute.usdz" alt="Ghost Salute AR" autoplay animation-name="Salute"
     camera-controls camera-orbit="0deg 75deg 0.65m" shadow-intensity="1" interaction-prompt="none"
     ar ar-modes="quick-look scene-viewer webxr" ar-placement="floor" ar-scale="fixed" loading="eager">
     <button slot="ar-button" id="ar">Open AR camera</button>
