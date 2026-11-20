@@ -52,7 +52,7 @@ header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
   </div>
   <button id="xr" class="ar-cta" disabled>Loading Ghost…</button>
   <a id="android-sv" class="ar-cta" href="#">Open AR camera</a>
-  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute_blender.usdz#allowsContentScaling=0">
+  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute_blender.usdz?v=table_fixed_2#allowsContentScaling=0">
     <img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
     Open AR camera
   </a>
@@ -197,43 +197,6 @@ function startClipOnMixer(targetFbx, clip) {
 }
 
 // Compute exact world-space bounding box of posed SkinnedMeshes
-const _basePos = new THREE.Vector3();
-const _skinPos = new THREE.Vector3();
-const _boneMat = new THREE.Matrix4();
-
-function getExactSkinnedVertex(mesh, index, target) {
-  const geom = mesh.geometry;
-  const posAttr = geom.attributes.position;
-  const skinIdx = geom.attributes.skinIndex;
-  const skinWt = geom.attributes.skinWeight;
-  const skeleton = mesh.skeleton;
-
-  _basePos.fromBufferAttribute(posAttr, index);
-  if (!skeleton || !skinIdx || !skinWt) {
-    target.copy(_basePos).applyMatrix4(mesh.matrixWorld);
-    return target;
-  }
-
-  if (mesh.bindMatrix) _basePos.applyMatrix4(mesh.bindMatrix);
-  target.set(0, 0, 0);
-
-  for (let j = 0; j < 4; j++) {
-    const wt = skinWt.getComponent(index, j);
-    if (wt === 0) continue;
-    const bIdx = skinIdx.getComponent(index, j);
-    const bone = skeleton.bones[bIdx];
-    if (!bone) continue;
-
-    _boneMat.multiplyMatrices(bone.matrixWorld, skeleton.boneInverses[bIdx]);
-    _skinPos.copy(_basePos).applyMatrix4(_boneMat);
-    target.addScaledVector(_skinPos, wt);
-  }
-
-  if (mesh.bindMatrixInverse) target.applyMatrix4(mesh.bindMatrixInverse);
-  target.applyMatrix4(mesh.matrixWorld);
-  return target;
-}
-
 function computeExactSkinnedBox(root) {
   root.updateMatrixWorld(true);
   const box = new THREE.Box3();
@@ -247,15 +210,15 @@ function computeExactSkinnedBox(root) {
     }
     const step = Math.max(1, Math.floor(pos.count / 3000));
     for (let i = 0; i < pos.count; i += step) {
-      try {
-        if (o.isSkinnedMesh) {
-          getExactSkinnedVertex(o, i, v);
-        } else {
-          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      v.fromBufferAttribute(pos, i);
+      if (o.isSkinnedMesh) {
+        if (typeof o.applyBoneTransform === 'function') {
+          o.applyBoneTransform(i, v);
+        } else if (typeof o.boneTransform === 'function') {
+          o.boneTransform(i, v);
         }
-      } catch (_) {
-        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
       }
+      v.applyMatrix4(o.matrixWorld);
       if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) box.expandByPoint(v);
     }
   });
@@ -407,12 +370,12 @@ xrBtn.onclick = async () => {
 
   ov.style.display = 'block';
   statusEl.style.display = 'block';
-  statusEl.textContent = 'Move phone slowly to scan the table…';
+  statusEl.textContent = 'Scan table… Tap screen to place Ghost.';
 
   let session;
   try {
     session = await navigator.xr.requestSession('immersive-ar', {
-      optionalFeatures: ['hit-test', 'dom-overlay', 'anchors'],
+      optionalFeatures: ['hit-test', 'dom-overlay', 'anchors', 'plane-detection'],
       domOverlay: { root: ov }
     });
   } catch (e) {
@@ -492,8 +455,8 @@ xrBtn.onclick = async () => {
     snapFrames = 0;
 
     statusEl.style.display = 'block';
-    statusEl.textContent = 'Table locked! Walk 360° around Ghost.';
-    setTimeout(() => { statusEl.style.display = 'none'; }, 2500);
+    statusEl.textContent = 'Ghost fixed to table! Walk 360° around. (Tap to move)';
+    setTimeout(() => { statusEl.style.display = 'none'; }, 3000);
   }
 
   // Tap table anywhere in camera to immediately place or reposition Ghost flush onto tabletop
@@ -552,7 +515,11 @@ xrBtn.onclick = async () => {
   }
 
   session.requestReferenceSpace('viewer')
-    .then(sp => session.requestHitTestSource({ space: sp }))
+    .then(sp => {
+      // Prioritize horizontal planes so we only hit the physical tabletop surface
+      return session.requestHitTestSource({ space: sp, entityTypes: ['plane'] })
+        .catch(() => session.requestHitTestSource({ space: sp }));
+    })
     .then(hs => { hitSource = hs; })
     .catch(() => { hitSource = null; });
 
@@ -610,16 +577,16 @@ xrBtn.onclick = async () => {
               }
               lastHitPos.set(pp.x, pp.y, pp.z);
 
-              // Auto-place when plane detection stabilizes (14 frames ~0.25-0.3s)
-              if (stableFrames >= 14) {
+              // Auto-place only after solid continuous table tracking (~1s of steady table detection)
+              if (stableFrames >= 60) {
                 placeGhostAt(pp, vp);
                 if (typeof hit.createAnchor === 'function') {
                   hit.createAnchor().then(a => { worldAnchor = a; }).catch(() => {});
                 }
               }
             } else {
-              // Once placed: continuously refine height to true table surface below Ghost
-              if (Math.hypot(pp.x - arModelRoot.position.x, pp.z - arModelRoot.position.z) < 0.45 && Math.abs(pp.y - targetY) < 0.30) {
+              // Once placed: continuously refine height to true table surface directly below Ghost
+              if (Math.hypot(pp.x - arModelRoot.position.x, pp.z - arModelRoot.position.z) < 0.45 && Math.abs(pp.y - targetY) < 0.35) {
                 targetY = pp.y;
               }
             }
