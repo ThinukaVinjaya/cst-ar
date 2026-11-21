@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>CST LAN Challenge – Ghost Salute AR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Orbitron:wght@600;700;800;900&display=swap" rel="stylesheet">
 <script type="importmap">
 {
   "imports": {
@@ -13,7 +16,23 @@
 }
 </script>
 <style>
-:root{--bg:#14170f;--ink:#ecebdc;--mute:#9a9f86;--flare:#ff6a1a}
+:root{
+  --bg:#14170f;
+  --ink:#ecebdc;
+  --mute:#9a9f86;
+  --flare:#ff6a1a;
+
+  /* Cyber-HUD Glassmorphic Theme Variables */
+  --hud-accent: #ff6a1a;
+  --hud-accent-glow: rgba(255, 106, 26, 0.45);
+  --hud-accent-subtle: rgba(255, 106, 26, 0.12);
+  --hud-success: #7fd655;
+  --hud-success-glow: rgba(127, 214, 85, 0.65);
+  --hud-card-bg: linear-gradient(145deg, rgba(20, 25, 32, 0.82) 0%, rgba(10, 14, 18, 0.94) 100%);
+  --hud-border: rgba(255, 106, 26, 0.32);
+  --hud-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --hud-font-hud: "Orbitron", "Barlow Condensed", sans-serif;
+}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",Arial,sans-serif;overflow:hidden}
 body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
@@ -22,12 +41,438 @@ h1{margin:0;font-size:2.3rem;line-height:1}
 header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
 #stage{position:relative;flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);overflow:hidden}
 #stage canvas{display:block;width:100%;height:100%;touch-action:none}
-#loader{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:rgba(20,23,15,.82);z-index:4}
-#loader.hidden{display:none}
-.bar-wrap{width:min(260px,78%);height:8px;background:#262c1c;border:1px solid #3a4128;border-radius:4px;overflow:hidden}
-#bar{height:100%;width:0%;background:var(--flare);transition:width .15s linear}
-#load-text{font-size:1.15rem;color:var(--ink);max-width:340px}
-#retry{display:none;padding:10px 22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.15rem;font-weight:700;border-radius:4px;cursor:pointer}
+
+/* ---- Cyber-HUD Glassmorphic Loading Screen ---- */
+#loader {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background-color: rgba(9, 12, 15, 0.88);
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(26, 32, 40, 0.65) 0%, rgba(8, 10, 13, 0.96) 80%),
+    linear-gradient(rgba(255, 106, 26, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 106, 26, 0.05) 1px, transparent 1px);
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+  background-position: center center;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 10;
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#loader.loaded {
+  opacity: 0;
+  transform: scale(1.03);
+  pointer-events: none;
+}
+
+#loader.hidden {
+  display: none !important;
+}
+
+/* Centered Frosted Glass HUD Card */
+.hud-card {
+  position: relative;
+  width: min(440px, 92vw);
+  background: var(--hud-card-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 12px;
+  padding: 24px 22px 22px;
+  box-shadow: 0 0 35px rgba(255, 106, 26, 0.14), 0 24px 50px rgba(0, 0, 0, 0.7), inset 0 0 25px rgba(255, 106, 26, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  animation: hudCardEntrance 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+@keyframes hudCardEntrance {
+  0% {
+    opacity: 0;
+    transform: scale(0.92) translateY(14px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* 4 Corner HUD Bracket Ticks */
+.hud-bracket {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: var(--hud-accent);
+  border-style: solid;
+  pointer-events: none;
+  box-shadow: 0 0 8px var(--hud-accent-glow);
+}
+.hud-bracket.tl { top: -2px; left: -2px; border-width: 2.5px 0 0 2.5px; border-top-left-radius: 4px; }
+.hud-bracket.tr { top: -2px; right: -2px; border-width: 2.5px 2.5px 0 0; border-top-right-radius: 4px; }
+.hud-bracket.bl { bottom: -2px; left: -2px; border-width: 0 0 2.5px 2.5px; border-bottom-left-radius: 4px; }
+.hud-bracket.br { bottom: -2px; right: -2px; border-width: 0 2.5px 2.5px 0; border-bottom-right-radius: 4px; }
+
+/* Card Header */
+.hud-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 106, 26, 0.15);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+.hud-meta-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hud-sys-tag {
+  font-family: var(--hud-font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  color: var(--hud-accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+}
+.hud-tag-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hud-accent);
+  box-shadow: 0 0 6px var(--hud-accent);
+  animation: hudDotPulse 1.4s infinite ease-in-out;
+}
+.hud-model-title {
+  margin: 0;
+  font-family: var(--hud-font-hud);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(255, 106, 26, 0.35);
+}
+.hud-type-badge {
+  font-family: var(--hud-font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  background: rgba(255, 106, 26, 0.1);
+  border: 1px solid rgba(255, 106, 26, 0.3);
+  border-radius: 4px;
+  color: var(--hud-accent);
+  font-weight: 600;
+}
+
+/* Holographic Centerpiece */
+.holo-centerpiece {
+  position: relative;
+  width: 126px;
+  height: 126px;
+  margin: 8px auto 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Outer Ring (Clockwise Dashed) */
+.holo-ring-outer {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px dashed rgba(255, 106, 26, 0.65);
+  box-shadow: 0 0 16px rgba(255, 106, 26, 0.22), inset 0 0 16px rgba(255, 106, 26, 0.1);
+  animation: holoSpinCW 10s linear infinite;
+}
+
+/* Inner Ring (Counter-Clockwise Dotted) */
+.holo-ring-inner {
+  position: absolute;
+  inset: 15px;
+  border-radius: 50%;
+  border: 2.5px dotted rgba(255, 106, 26, 0.85);
+  box-shadow: 0 0 12px rgba(255, 106, 26, 0.3);
+  animation: holoSpinCCW 5.5s linear infinite;
+}
+
+/* Radial Pulsing Glow Core */
+.holo-core-glow {
+  position: absolute;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 106, 26, 0.42) 0%, rgba(255, 106, 26, 0.12) 48%, transparent 72%);
+  animation: holoCorePulse 2.4s ease-in-out infinite alternate;
+}
+
+/* SVG Icon */
+.holo-icon-box {
+  position: relative;
+  z-index: 2;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 0 8px var(--hud-accent-glow));
+}
+.holo-icon-box svg {
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes holoSpinCW {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes holoSpinCCW {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+@keyframes holoCorePulse {
+  0% { transform: scale(0.92); opacity: 0.6; }
+  100% { transform: scale(1.15); opacity: 1; }
+}
+
+/* 3-Stage Progress Breadcrumbs */
+.hud-breadcrumbs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 8px 10px;
+  background: rgba(10, 14, 18, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+.step-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 4px;
+  border-radius: 5px;
+  font-family: var(--hud-font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+.step-pill.pending {
+  color: rgba(255, 255, 255, 0.3);
+  background: transparent;
+  border: 1px solid transparent;
+}
+.step-pill.active {
+  color: #fff;
+  background: rgba(255, 106, 26, 0.16);
+  border: 1px solid rgba(255, 106, 26, 0.5);
+  box-shadow: 0 0 12px rgba(255, 106, 26, 0.28);
+}
+.step-pill.complete {
+  color: var(--hud-success);
+  background: rgba(127, 214, 85, 0.12);
+  border: 1px solid rgba(127, 214, 85, 0.4);
+  box-shadow: 0 0 10px rgba(127, 214, 85, 0.2);
+}
+
+.step-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+.step-pill.pending .step-status-dot {
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: none;
+}
+.step-pill.active .step-status-dot {
+  background: var(--hud-accent);
+  box-shadow: 0 0 8px var(--hud-accent);
+  animation: hudDotPulse 1.2s infinite ease-in-out;
+}
+.step-pill.complete .step-status-dot {
+  background: var(--hud-success);
+  box-shadow: 0 0 8px var(--hud-success-glow);
+  animation: none;
+}
+
+@keyframes hudDotPulse {
+  0%, 100% {
+    transform: scale(0.9);
+    box-shadow: 0 0 4px var(--hud-accent);
+  }
+  50% {
+    transform: scale(1.35);
+    box-shadow: 0 0 12px var(--hud-accent);
+  }
+}
+
+.step-chevron {
+  color: rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 0.65rem;
+}
+.step-pill.complete + .step-chevron {
+  color: rgba(127, 214, 85, 0.6);
+}
+
+/* Progress Block */
+.hud-progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hud-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.hud-status-label {
+  font-family: var(--hud-font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hud-telemetry-tag {
+  font-family: var(--hud-font-mono);
+  font-size: 0.65rem;
+  color: var(--hud-accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+/* Glowing Gradient Progress Bar */
+.hud-bar-track {
+  position: relative;
+  width: 100%;
+  height: 9px;
+  background: rgba(10, 14, 18, 0.95);
+  border: 1px solid rgba(255, 106, 26, 0.3);
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+.hud-bar-fill {
+  position: relative;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #d33c00 0%, #ff6a1a 65%, #ff9838 100%);
+  border-radius: 4px;
+  box-shadow: 0 0 14px rgba(255, 106, 26, 0.7);
+  transition: width 0.16s linear;
+  overflow: hidden;
+}
+.hud-bar-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.55) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: hudBarShimmer 1.6s infinite linear;
+  pointer-events: none;
+}
+.hud-bar-laser-head {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 3px;
+  background: #ffffff;
+  box-shadow: 0 0 8px #ffffff, 0 0 16px var(--hud-accent);
+}
+@keyframes hudBarShimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Dual Live Metrics Row */
+.hud-metrics-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--hud-font-mono);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+.metric-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--mute);
+}
+.metric-icon {
+  color: var(--hud-accent);
+  font-size: 0.65rem;
+}
+.metric-value {
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.metric-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.metric-label {
+  color: var(--mute);
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+}
+.hud-pct-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  background: rgba(255, 106, 26, 0.14);
+  border: 1px solid rgba(255, 106, 26, 0.38);
+  border-radius: 4px;
+  color: var(--hud-accent);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  box-shadow: 0 0 8px rgba(255, 106, 26, 0.2);
+}
+
+/* Retry Button (Styled in Cyber-HUD Aesthetic) */
+#retry {
+  display: none;
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, rgba(255, 106, 26, 0.2) 0%, rgba(255, 106, 26, 0.35) 100%);
+  color: #fff;
+  border: 1px solid var(--hud-accent);
+  border-radius: 6px;
+  font-family: var(--hud-font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 0 16px rgba(255, 106, 26, 0.25);
+  transition: all 0.2s ease;
+}
+#retry:hover {
+  background: var(--hud-accent);
+  color: #14170f;
+  box-shadow: 0 0 20px rgba(255, 106, 26, 0.6);
+}
 .ar-cta{display:none;position:absolute;left:18px;right:18px;bottom:18px;padding:22px;background:var(--flare);color:#14170f;border:0;font:inherit;font-size:1.8rem;font-weight:700;text-align:center;text-decoration:none;cursor:pointer;border-radius:4px;z-index:5}
 .ar-cta:disabled{opacity:.6;cursor:default}
 .ar-cta:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
@@ -46,9 +491,104 @@ header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
 
 <div id="stage">
   <div id="loader">
-    <div id="load-text">Downloading Ghost Salute…</div>
-    <div class="bar-wrap"><div id="bar"></div></div>
-    <button id="retry">Retry</button>
+    <div class="hud-card">
+      <!-- 4 Corner HUD Bracket Ticks -->
+      <span class="hud-bracket tl"></span>
+      <span class="hud-bracket tr"></span>
+      <span class="hud-bracket bl"></span>
+      <span class="hud-bracket br"></span>
+
+      <!-- Card Header -->
+      <div class="hud-card-header">
+        <div class="hud-meta-left">
+          <div class="hud-sys-tag">
+            <span class="hud-tag-pulse"></span>
+            <span>SYS // AR_INITIALIZER</span>
+          </div>
+          <h2 id="hud-model-name" class="hud-model-title">Ghost Salute</h2>
+        </div>
+        <div class="hud-type-badge">SKELETAL 3D</div>
+      </div>
+
+      <!-- Holographic Centerpiece -->
+      <div class="holo-centerpiece">
+        <!-- Outer Dashed Ring (Clockwise) -->
+        <div class="holo-ring-outer"></div>
+        <!-- Inner Dotted Ring (Counter-Clockwise) -->
+        <div class="holo-ring-inner"></div>
+        <!-- Radial Pulsing Glow Core -->
+        <div class="holo-core-glow"></div>
+        <!-- Center Holographic SVG Icon -->
+        <div class="holo-icon-box">
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Targeting Reticle Crosshairs -->
+            <circle cx="32" cy="32" r="30" stroke="#ff6a1a" stroke-opacity="0.3" stroke-width="1" stroke-dasharray="3 3"/>
+            <line x1="32" y1="2" x2="32" y2="8" stroke="#ff6a1a" stroke-width="2" stroke-linecap="round"/>
+            <line x1="32" y1="56" x2="32" y2="62" stroke="#ff6a1a" stroke-width="2" stroke-linecap="round"/>
+            <line x1="2" y1="32" x2="8" y2="32" stroke="#ff6a1a" stroke-width="2" stroke-linecap="round"/>
+            <line x1="56" y1="32" x2="62" y2="32" stroke="#ff6a1a" stroke-width="2" stroke-linecap="round"/>
+            <!-- Tactical Operator Helmet / Skull Contour -->
+            <path d="M19 22C19 14 45 14 45 22L48 34C48 44 42 50 32 50C22 50 16 44 16 34L19 22Z" fill="rgba(255, 106, 26, 0.12)" stroke="#ff6a1a" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M18 24H46" stroke="#ff6a1a" stroke-width="1.5" stroke-linecap="round"/>
+            <!-- Angled Tactical Visor -->
+            <polygon points="21,28 29,30 27,37 20,34" fill="#ff6a1a" fill-opacity="0.9"/>
+            <polygon points="43,28 35,30 37,37 44,34" fill="#ff6a1a" fill-opacity="0.9"/>
+            <!-- Targeting Diamond -->
+            <polygon points="32,38 29,43 35,43" fill="#ff6a1a" fill-opacity="0.75"/>
+            <!-- Respirator Slits -->
+            <line x1="25" y1="46" x2="39" y2="46" stroke="#ff6a1a" stroke-width="1.8" stroke-linecap="round"/>
+            <line x1="27" y1="49" x2="37" y2="49" stroke="#ff6a1a" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </div>
+
+      <!-- 3-Stage Progress Breadcrumbs -->
+      <div class="hud-breadcrumbs">
+        <div id="step-stream" class="step-pill active">
+          <span class="step-status-dot"></span>
+          <span>1. STREAM</span>
+        </div>
+        <div class="step-chevron">▶</div>
+        <div id="step-rigging" class="step-pill pending">
+          <span class="step-status-dot"></span>
+          <span>2. RIGGING</span>
+        </div>
+        <div class="step-chevron">▶</div>
+        <div id="step-ready" class="step-pill pending">
+          <span class="step-status-dot"></span>
+          <span>3. READY</span>
+        </div>
+      </div>
+
+      <!-- Progress Bar & Telemetry Block -->
+      <div class="hud-progress-block">
+        <div class="hud-status-row">
+          <span id="load-text" class="hud-status-label">Streaming Assets…</span>
+          <span id="telemetry-tag" class="hud-telemetry-tag">RX // SYNC</span>
+        </div>
+        <!-- Glowing gradient progress bar with shimmer/laser reflection -->
+        <div class="hud-bar-track">
+          <div id="bar" class="hud-bar-fill">
+            <div class="hud-bar-shimmer"></div>
+            <div class="hud-bar-laser-head"></div>
+          </div>
+        </div>
+        <!-- Dual live metrics row underneath -->
+        <div class="hud-metrics-row">
+          <div class="metric-left">
+            <span class="metric-icon">◈</span>
+            <span id="mb-counter" class="metric-value">0.0 / 29.5 MB</span>
+          </div>
+          <div class="metric-right">
+            <span class="metric-label">TELEMETRY:</span>
+            <span id="pct-badge" class="hud-pct-badge">0%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Retry Button -->
+      <button id="retry">↺ RETRY SYNC</button>
+    </div>
   </div>
   <button id="xr" class="ar-cta" disabled>Loading Ghost…</button>
   <a id="android-sv" class="ar-cta" href="#">Open AR camera</a>
@@ -69,13 +609,48 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
-const MODEL_URL = 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx';
+// Project Specifications: Easily customizable parameters
+const HUD_CONFIG = {
+  modelName: 'Ghost Salute',
+  modelUrl: 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx',
+  accentColor: '#ff6a1a',
+  fallbackSizeMB: 29.5
+};
+
+const MODEL_URL = HUD_CONFIG.modelUrl;
 const TARGET_HEIGHT = 0.25; // 25 cm tabletop height (set to 1.8 for life-size)
 
 const $ = id => document.getElementById(id);
 const stage = $('stage'), xrBtn = $('xr'), androidSvBtn = $('android-sv'), iosBtn = $('ios-ar'), note = $('note');
 const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBtn = $('retry');
+const stepStream = $('step-stream'), stepRigging = $('step-rigging'), stepReady = $('step-ready');
+const mbCounter = $('mb-counter'), pctBadge = $('pct-badge'), telemetryTag = $('telemetry-tag');
 const ov = $('overlay'), statusEl = $('status');
+
+// Helper to transition the 3-Stage Progress Breadcrumbs
+function setPipelineStage(stageNum) {
+  // stageNum: 1 = STREAM, 2 = RIGGING, 3 = READY
+  if (stageNum === 1) {
+    stepStream.className = 'step-pill active';
+    stepRigging.className = 'step-pill pending';
+    stepReady.className = 'step-pill pending';
+  } else if (stageNum === 2) {
+    stepStream.className = 'step-pill complete';
+    stepRigging.className = 'step-pill active';
+    stepReady.className = 'step-pill pending';
+  } else if (stageNum === 3) {
+    stepStream.className = 'step-pill complete';
+    stepRigging.className = 'step-pill complete';
+    stepReady.className = 'step-pill complete';
+  }
+}
+
+// Dynamically bind Project Specifications to DOM & CSS variables
+if ($('hud-model-name')) $('hud-model-name').textContent = HUD_CONFIG.modelName;
+if (HUD_CONFIG.accentColor) {
+  document.documentElement.style.setProperty('--hud-accent', HUD_CONFIG.accentColor);
+  document.documentElement.style.setProperty('--flare', HUD_CONFIG.accentColor);
+}
 
 // ---- Preview Three.js Renderer & Scene (Plays S3 FBX + Skeletal Animation Directly) ----
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -250,28 +825,50 @@ async function fetchArrayBufferWithProgress(url, onProgress) {
 
 // ---- Load S3 FBX Model WITH Full Embedded Skeletal Animation ----
 async function loadFBXModel() {
+  loaderEl.style.display = 'flex';
+  loaderEl.classList.remove('loaded');
   loaderEl.classList.remove('hidden');
   retryBtn.style.display = 'none';
-  bar.style.width = '5%';
-  loadText.textContent = 'Downloading Ghost Salute…';
+
+  setPipelineStage(1);
+  loadText.textContent = 'Streaming Assets…';
+  telemetryTag.textContent = 'RX // SYNC';
+  bar.style.width = '3%';
+  mbCounter.textContent = `0.0 / ${HUD_CONFIG.fallbackSizeMB.toFixed(1)} MB`;
+  pctBadge.textContent = '0%';
   modelReady = false;
   updateButtons();
 
+  let detectedTotalMB = HUD_CONFIG.fallbackSizeMB;
+
   try {
     const buffer = await fetchArrayBufferWithProgress(MODEL_URL, (loaded, total) => {
+      const loadedMB = loaded / 1048576;
       if (total > 0) {
-        const pct = Math.min(92, Math.round((loaded / total) * 92));
-        bar.style.width = pct + '%';
-        loadText.textContent = `Downloading Ghost Salute… ${pct}% (${(loaded / 1048576).toFixed(1)} MB)`;
+        detectedTotalMB = total / 1048576;
+        const rawPct = Math.min(100, Math.round((loaded / total) * 100));
+        // Allocate 0-88% of progress bar for download phase
+        const barPct = Math.min(88, Math.round((loaded / total) * 88));
+        bar.style.width = `${barPct}%`;
+        pctBadge.textContent = `${rawPct}%`;
+        mbCounter.textContent = `${loadedMB.toFixed(1)} / ${detectedTotalMB.toFixed(1)} MB`;
+        telemetryTag.textContent = rawPct >= 100 ? 'RX // BUFFERED' : 'RX // STREAMING';
       } else {
-        bar.style.width = '45%';
-        loadText.textContent = `Downloading Ghost Salute… ${(loaded / 1048576).toFixed(1)} MB`;
+        const estPct = Math.min(85, Math.round((loadedMB / HUD_CONFIG.fallbackSizeMB) * 85));
+        bar.style.width = `${estPct}%`;
+        pctBadge.textContent = `${estPct}%`;
+        mbCounter.textContent = `${loadedMB.toFixed(1)} / ${HUD_CONFIG.fallbackSizeMB.toFixed(1)} MB`;
       }
     });
 
-    loadText.textContent = 'Starting FBX & Salute animation…';
-    bar.style.width = '96%';
-    await new Promise(r => setTimeout(r, 20));
+    // Stage 2: Rigging Skeleton & Embedded Animation Tracks
+    setPipelineStage(2);
+    loadText.textContent = 'Rigging Skeleton…';
+    telemetryTag.textContent = 'SKELETON // BIND';
+    bar.style.width = '94%';
+    pctBadge.textContent = '94%';
+    mbCounter.textContent = `${detectedTotalMB.toFixed(1)} / ${detectedTotalMB.toFixed(1)} MB`;
+    await new Promise(r => setTimeout(r, 40));
 
     const fbxLoader = new FBXLoader();
     const basePath = MODEL_URL.substring(0, MODEL_URL.lastIndexOf('/') + 1);
@@ -331,14 +928,28 @@ async function loadFBXModel() {
       fbxWrap.position.set(-cx, -box2.min.y, -cz);
     }
 
-    modelReady = true;
+    // Stage 3: Ready for AR!
+    setPipelineStage(3);
+    loadText.textContent = 'Ready for AR!';
+    telemetryTag.textContent = 'SYS.ONLINE';
     bar.style.width = '100%';
-    loaderEl.classList.add('hidden');
+    pctBadge.textContent = '100%';
+    modelReady = true;
     updateButtons();
+
+    // Smooth fade out with scale 1.03 after brief pause so user sees completion
+    await new Promise(r => setTimeout(r, 450));
+    loaderEl.classList.add('loaded');
+    setTimeout(() => {
+      loaderEl.style.display = 'none';
+    }, 650);
+
   } catch (err) {
     console.error('FBX load error:', err);
-    loadText.textContent = 'Could not load model: ' + (err && err.message ? err.message : 'Network/parse error');
+    loadText.textContent = 'Load Failure: ' + (err && err.message ? err.message : 'Network/parse error');
+    telemetryTag.textContent = 'ERR_INTERRUPT';
     bar.style.width = '0%';
+    pctBadge.textContent = 'ERR';
     retryBtn.style.display = 'inline-block';
     updateButtons();
   }
