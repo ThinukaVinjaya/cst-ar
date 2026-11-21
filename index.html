@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>CST LAN Challenge – Ghost Salute AR</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -670,13 +673,13 @@ stage.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, stage.clientWidth / Math.max(stage.clientHeight, 1), 0.01, 50);
-camera.position.set(0, 0.20, 0.56);
+camera.position.set(0, 0.18, 0.52);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.12, 0);
+controls.target.set(0, 0.125, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 0.22;
+controls.minDistance = 0.20;
 controls.maxDistance = 2.0;
 controls.update();
 
@@ -695,6 +698,7 @@ scene.add(previewFloor);
 
 // Outer root -> inner fbxWrap (handles scale/orientation/grounding without touching FBX skeleton!)
 const modelRoot = new THREE.Group();
+modelRoot.visible = false; // Hidden until initial pose, scale, and grounding are completely applied
 const fbxWrap = new THREE.Group();
 modelRoot.add(fbxWrap);
 scene.add(modelRoot);
@@ -774,12 +778,7 @@ function startClipOnMixer(targetFbx, clip) {
   return m;
 }
 
-// Pre-allocated vectors for exact CPU skeletal skinning bounding box
-const _skinBasePos = new THREE.Vector3();
-const _skinPos = new THREE.Vector3();
-const _boneMatrix = new THREE.Matrix4();
-
-// Compute exact bounding box of posed SkinnedMeshes with CPU skinning
+// Compute exact bounding box of posed SkinnedMeshes with Three.js CPU skeletal skinning
 function computeExactSkinnedBox(root) {
   root.updateMatrixWorld(true);
   const box = new THREE.Box3();
@@ -793,41 +792,22 @@ function computeExactSkinnedBox(root) {
 
     if (o.isSkinnedMesh && o.skeleton && o.skeleton.bones && o.skeleton.bones.length > 0) {
       try { o.skeleton.update(); } catch (_) {}
-      const skinIdx = o.geometry.attributes.skinIndex;
-      const skinWt = o.geometry.attributes.skinWeight;
-      const skeleton = o.skeleton;
-
-      const step = Math.max(1, Math.floor(pos.count / 800));
+      const step = Math.max(1, Math.floor(pos.count / 600));
       for (let i = 0; i < pos.count; i += step) {
-        _skinBasePos.fromBufferAttribute(pos, i);
-        if (o.bindMatrix) _skinBasePos.applyMatrix4(o.bindMatrix);
-        v.set(0, 0, 0);
-
-        if (skinIdx && skinWt) {
-          for (let j = 0; j < 4; j++) {
-            const wt = skinWt.getComponent(i, j);
-            if (wt === 0) continue;
-            const bIdx = skinIdx.getComponent(i, j);
-            const bone = skeleton.bones[bIdx];
-            if (!bone || !skeleton.boneInverses[bIdx]) continue;
-
-            _boneMatrix.multiplyMatrices(bone.matrixWorld, skeleton.boneInverses[bIdx]);
-            _skinPos.copy(_skinBasePos).applyMatrix4(_boneMatrix);
-            v.addScaledVector(_skinPos, wt);
-          }
-          if (o.bindMatrixInverse) v.applyMatrix4(o.bindMatrixInverse);
+        if (typeof o.applyBoneTransform === 'function') {
+          v.fromBufferAttribute(pos, i);
+          o.applyBoneTransform(i, v);
           v.applyMatrix4(o.matrixWorld);
         } else {
-          v.copy(_skinBasePos).applyMatrix4(o.matrixWorld);
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
         }
-
         if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) {
           box.expandByPoint(v);
           validCount++;
         }
       }
     } else {
-      const step = Math.max(1, Math.floor(pos.count / 400));
+      const step = Math.max(1, Math.floor(pos.count / 300));
       for (let i = 0; i < pos.count; i += step) {
         v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
         if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) {
@@ -1003,41 +983,9 @@ async function loadFBXModel() {
       console.warn('No animation clips found inside FBX.');
     }
 
-    // Auto-orient upright & scale to 25 cm tabletop height using the OUTER fbxWrap (never breaking FBX skeleton!)
-    // Detect skeletal orientation by inspecting bone hierarchy positions
-    let headBone = null;
-    let hipsBone = null;
-    fbx.traverse(o => {
-      if (!o.name) return;
-      const n = o.name.toLowerCase();
-      if (!headBone && n.includes('head') && !n.includes('top')) headBone = o;
-      if (!hipsBone && (n.includes('hips') || n.includes('pelvis'))) hipsBone = o;
-    });
-
-    let needsZtoYRotation = false;
-    if (headBone && hipsBone) {
-      const pHead = new THREE.Vector3().setFromMatrixPosition(headBone.matrixWorld);
-      const pHips = new THREE.Vector3().setFromMatrixPosition(hipsBone.matrixWorld);
-      const dY = pHead.y - pHips.y;
-      const dZ = pHead.z - pHips.z;
-      // Only rotate if head is aligned along Z (Z-up model) rather than Y (Y-up model)
-      if (Math.abs(dZ) > Math.abs(dY) * 1.3) {
-        needsZtoYRotation = true;
-      }
-    } else {
-      const box0 = computeExactSkinnedBox(fbxWrap);
-      const dx0 = box0.max.x - box0.min.x;
-      const dy0 = box0.max.y - box0.min.y;
-      const dz0 = box0.max.z - box0.min.z;
-      if (dz0 > dy0 * 1.4 && dz0 > dx0) {
-        needsZtoYRotation = true;
-      }
-    }
-
-    if (needsZtoYRotation) {
-      fbxWrap.rotation.x = -Math.PI / 2;
-      fbxWrap.updateMatrixWorld(true);
-    }
+    // Ghost Salute is a Y-up humanoid: keep rotation at (0, 0, 0) so Ghost stands tall and upright on his feet
+    fbxWrap.rotation.set(0, 0, 0);
+    fbxWrap.updateMatrixWorld(true);
 
     const box1 = computeExactSkinnedBox(fbxWrap);
     let rawH = box1.max.y - box1.min.y;
@@ -1046,15 +994,8 @@ async function loadFBXModel() {
       rawH = bAlt.max.y - bAlt.min.y;
     }
 
-    let s;
-    if (rawH > 20) {
-      s = TARGET_HEIGHT / rawH; // Centimeters scale
-    } else if (rawH > 0.05) {
-      s = TARGET_HEIGHT / rawH; // Meters scale
-    } else {
-      s = (rawH > 0.0001 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 13.17;
-    }
-
+    // Scale to exact 25 cm tabletop height (Ghost is ~1.896m -> scale ~0.13186)
+    const s = (rawH > 0.05 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 0.13186;
     fbxWrap.scale.setScalar(s);
     fbxWrap.updateMatrixWorld(true);
 
@@ -1062,9 +1003,13 @@ async function loadFBXModel() {
     if (!box2.isEmpty()) {
       const cx = (box2.min.x + box2.max.x) * 0.5;
       const cz = (box2.min.z + box2.max.z) * 0.5;
+      // Position boots flush at ground Y = 0.0 directly on the preview floor circle
       fbxWrap.position.set(-cx, -box2.min.y, -cz);
       fbxWrap.updateMatrixWorld(true);
     }
+
+    // Reveal model now that Ghost is fully positioned and standing upright
+    modelRoot.visible = true;
 
     // Stage 3: Ready for AR!
     setPipelineStage(3);
@@ -1271,8 +1216,8 @@ async function startXRSession(session) {
     modelRoot.rotation.set(0, 0, 0);
     mixer = startClipOnMixer(loadedFbx, activeClip);
 
-    camera.position.set(0, 0.20, 0.56);
-    controls.target.set(0, 0.12, 0);
+    camera.position.set(0, 0.18, 0.52);
+    controls.target.set(0, 0.125, 0);
     controls.enabled = true;
     controls.update();
     onResize();
