@@ -40,7 +40,9 @@ header{padding:16px 20px 6px}
 h1{margin:0;font-size:2.3rem;line-height:1}
 header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
 #stage{position:relative;flex:1;min-height:0;width:100%;background:radial-gradient(circle at 50% 55%,#2d3521,#14170f 72%);overflow:hidden}
+#stage.cam-ar-active{background:transparent !important}
 #stage canvas{display:block;width:100%;height:100%;touch-action:none}
+#stage.cam-ar-active canvas{position:relative;z-index:2}
 
 /* ---- Cyber-HUD Glassmorphic Loading Screen ---- */
 #loader {
@@ -590,9 +592,11 @@ header p{margin:6px 0 0;color:var(--mute);font-size:1.1rem}
       <button id="retry">↺ RETRY SYNC</button>
     </div>
   </div>
+  <video id="cam-video" playsinline autoplay muted style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;pointer-events:none;"></video>
+  <button id="exit-cam" style="display:none;position:absolute;bottom:calc(20px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:14px 28px;background:rgba(11,17,20,0.92);color:var(--hud-accent);border:1.5px solid var(--hud-accent);border-radius:6px;font-family:var(--hud-font-mono);font-size:0.95rem;font-weight:700;letter-spacing:0.08em;cursor:pointer;z-index:25;box-shadow:0 0 16px rgba(255,106,26,0.3);">✕ CLOSE CAMERA AR</button>
   <button id="xr" class="ar-cta" disabled>Loading Ghost…</button>
   <a id="android-sv" class="ar-cta" href="#">Open AR camera</a>
-  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute_blender.usdz?v=table_fixed_2#allowsContentScaling=0">
+  <a id="ios-ar" class="ar-cta" rel="ar" href="models/ghost_salute_blender.usdz#allowsContentScaling=1">
     <img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
     Open AR camera
   </a>
@@ -626,6 +630,8 @@ const loaderEl = $('loader'), loadText = $('load-text'), bar = $('bar'), retryBt
 const stepStream = $('step-stream'), stepRigging = $('step-rigging'), stepReady = $('step-ready');
 const mbCounter = $('mb-counter'), pctBadge = $('pct-badge'), telemetryTag = $('telemetry-tag');
 const ov = $('overlay'), statusEl = $('status');
+const camVideo = $('cam-video'), exitCamBtn = $('exit-cam');
+let camStream = null;
 
 // Helper to transition the 3-Stage Progress Breadcrumbs
 function setPipelineStage(stageNum) {
@@ -718,28 +724,24 @@ if (isAndroid && !hasWebXR) {
 }
 
 function updateButtons() {
-  if (hasWebXR) {
+  if (camStream) return;
+  if (isIOS) {
+    xrBtn.style.display = 'none';
+    androidSvBtn.style.display = 'none';
+    iosBtn.style.display = 'block';
+    if (modelReady) note.textContent = 'Tap Open AR camera, scan the real table, and walk 360° around Ghost.';
+  } else {
+    // Android, Desktop, or other browsers: always provide active AR button
     xrBtn.style.display = 'block';
     androidSvBtn.style.display = 'none';
     iosBtn.style.display = 'none';
     xrBtn.disabled = !modelReady;
     xrBtn.textContent = modelReady ? 'Open AR camera' : 'Loading Ghost…';
-    if (modelReady) note.textContent = 'Tap Open AR camera, scan the table, then walk 360° around Ghost.';
-  } else if (isIOS) {
-    xrBtn.style.display = 'none';
-    androidSvBtn.style.display = 'none';
-    iosBtn.style.display = 'block';
-    if (modelReady) note.textContent = 'Tap Open AR camera, scan the real table, and walk 360° around Ghost.';
-  } else if (isAndroid) {
-    xrBtn.style.display = 'none';
-    androidSvBtn.style.display = 'block';
-    iosBtn.style.display = 'none';
-    if (modelReady) note.textContent = 'Tap Open AR camera, scan the table, and walk 360° around Ghost.';
-  } else {
-    xrBtn.style.display = 'none';
-    androidSvBtn.style.display = 'none';
-    iosBtn.style.display = 'none';
-    if (modelReady) note.textContent = '3D animated preview active. Open on Android Chrome or iPhone Safari for AR.';
+    if (modelReady) {
+      note.textContent = hasWebXR
+        ? 'Tap Open AR camera, scan the table, then walk 360° around Ghost.'
+        : 'Tap Open AR camera to place Ghost on your table.';
+    }
   }
 }
 updateButtons();
@@ -771,11 +773,13 @@ function startClipOnMixer(targetFbx, clip) {
   return m;
 }
 
-// Compute exact world-space bounding box of posed SkinnedMeshes
+// Compute exact bounding box of posed SkinnedMeshes with fallback
 function computeExactSkinnedBox(root) {
   root.updateMatrixWorld(true);
   const box = new THREE.Box3();
   const v = new THREE.Vector3();
+  let validCount = 0;
+
   root.traverse(o => {
     if (!o.isMesh || !o.geometry) return;
     const pos = o.geometry.attributes.position;
@@ -783,20 +787,23 @@ function computeExactSkinnedBox(root) {
     if (o.isSkinnedMesh && o.skeleton) {
       try { o.skeleton.update(); } catch (_) {}
     }
-    const step = Math.max(1, Math.floor(pos.count / 3000));
+    const step = Math.max(1, Math.floor(pos.count / 1000));
     for (let i = 0; i < pos.count; i += step) {
       v.fromBufferAttribute(pos, i);
-      if (o.isSkinnedMesh) {
-        if (typeof o.applyBoneTransform === 'function') {
-          o.applyBoneTransform(i, v);
-        } else if (typeof o.boneTransform === 'function') {
-          o.boneTransform(i, v);
-        }
+      if (o.isSkinnedMesh && typeof o.boneTransform === 'function') {
+        try { o.boneTransform(i, v); } catch (_) {}
       }
       v.applyMatrix4(o.matrixWorld);
-      if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) box.expandByPoint(v);
+      if (isFinite(v.x) && isFinite(v.y) && isFinite(v.z)) {
+        box.expandByPoint(v);
+        validCount++;
+      }
     }
   });
+
+  if (validCount === 0 || box.isEmpty()) {
+    box.setFromObject(root);
+  }
   return box;
 }
 
@@ -917,15 +924,30 @@ async function loadFBXModel() {
     }
 
     const box1 = computeExactSkinnedBox(fbxWrap);
-    const rawH = box1.max.y - box1.min.y;
-    const s = (rawH > 0.0001 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 13.1;
+    let rawH = box1.max.y - box1.min.y;
+    if (!isFinite(rawH) || rawH <= 0.001) {
+      const bAlt = new THREE.Box3().setFromObject(fbxWrap);
+      rawH = bAlt.max.y - bAlt.min.y;
+    }
+
+    let s;
+    if (rawH > 20) {
+      s = TARGET_HEIGHT / rawH; // Centimeters scale
+    } else if (rawH > 0.05) {
+      s = TARGET_HEIGHT / rawH; // Meters scale
+    } else {
+      s = (rawH > 0.0001 && isFinite(rawH)) ? (TARGET_HEIGHT / rawH) : 13.17;
+    }
+
     fbxWrap.scale.setScalar(s);
+    fbxWrap.updateMatrixWorld(true);
 
     const box2 = computeExactSkinnedBox(fbxWrap);
     if (!box2.isEmpty()) {
       const cx = (box2.min.x + box2.max.x) * 0.5;
       const cz = (box2.min.z + box2.max.z) * 0.5;
       fbxWrap.position.set(-cx, -box2.min.y, -cz);
+      fbxWrap.updateMatrixWorld(true);
     }
 
     // Stage 3: Ready for AR!
@@ -973,27 +995,57 @@ function previewLoop() {
 }
 renderer.setAnimationLoop(previewLoop);
 
-// ---- Android Chrome WebXR (Dedicated WebXR Renderer + Fresh AnimationMixer + 6-DoF Table Anchor) ----
+// ---- Camera AR Pass-Through Fallback (Universal WebAR for LAN / HTTP / Desktop) ----
+async function startCameraAR() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error('Camera access requires HTTPS or localhost.');
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+  } catch (err1) {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  }
+
+  camStream = stream;
+  camVideo.srcObject = stream;
+  await camVideo.play();
+  camVideo.style.display = 'block';
+  previewFloor.visible = false;
+  stage.classList.add('cam-ar-active');
+  exitCamBtn.style.display = 'block';
+  xrBtn.style.display = 'none';
+  if (androidSvBtn) androidSvBtn.style.display = 'none';
+  if (iosBtn) iosBtn.style.display = 'none';
+
+  camera.position.set(0, 0.28, 0.65);
+  controls.target.set(0, 0.12, 0);
+  controls.update();
+  note.textContent = 'Camera AR active! Drag to rotate & position Ghost on your table.';
+}
+
+function stopCameraAR() {
+  if (camStream) {
+    camStream.getTracks().forEach(track => track.stop());
+    camStream = null;
+  }
+  camVideo.srcObject = null;
+  camVideo.style.display = 'none';
+  previewFloor.visible = true;
+  stage.classList.remove('cam-ar-active');
+  exitCamBtn.style.display = 'none';
+  updateButtons();
+}
+exitCamBtn.onclick = stopCameraAR;
+
+// ---- WebXR Immersive Session Runner ----
 let xrSession = null;
 
-xrBtn.onclick = async () => {
-  if (!modelReady || !loadedFbx || xrSession) return;
-
-  ov.style.display = 'block';
-  statusEl.style.display = 'block';
-  statusEl.textContent = 'Scan table… Tap screen to place Ghost.';
-
-  let session;
-  try {
-    session = await navigator.xr.requestSession('immersive-ar', {
-      optionalFeatures: ['hit-test', 'dom-overlay', 'anchors', 'plane-detection'],
-      domOverlay: { root: ov }
-    });
-  } catch (e) {
-    ov.style.display = 'none';
-    note.textContent = 'Could not start AR. Allow camera access and try again.';
-    return;
-  }
+async function startXRSession(session) {
   xrSession = session;
 
   // Pause preview loop & preview mixer so WebXR has exclusive control of loadedFbx + GPU
@@ -1115,13 +1167,17 @@ xrBtn.onclick = async () => {
   session.addEventListener('end', cleanupAR);
 
   try {
-    arRenderer.xr.setReferenceSpaceType('local');
+    try {
+      arRenderer.xr.setReferenceSpaceType('local-floor');
+    } catch (_) {
+      arRenderer.xr.setReferenceSpaceType('local');
+    }
     await arRenderer.xr.setSession(session);
     refSpace = arRenderer.xr.getReferenceSpace();
   } catch (e) {
     try { await session.end(); } catch (_) {}
     cleanupAR();
-    note.textContent = 'Could not attach WebXR session. Try again.';
+    note.textContent = 'Could not attach WebXR session. Try Camera AR instead.';
     return;
   }
 
@@ -1236,6 +1292,66 @@ xrBtn.onclick = async () => {
 
     arRenderer.render(arScene, arCamera);
   });
+}
+
+// ---- Main AR Launch Trigger (Resilient Multi-Mode) ----
+xrBtn.onclick = async () => {
+  if (!modelReady || !loadedFbx || xrSession || camStream) return;
+
+  // 1. If WebXR is supported by browser, attempt native 6-DoF ARCore session
+  if (navigator.xr) {
+    ov.style.display = 'block';
+    statusEl.style.display = 'block';
+    statusEl.textContent = 'Scan table… Tap screen to place Ghost.';
+
+    let session = null;
+    try {
+      session = await navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay', 'anchors', 'plane-detection'],
+        domOverlay: { root: ov }
+      });
+    } catch (e1) {
+      console.warn('WebXR level 1 failed, trying level 2:', e1);
+      try {
+        session = await navigator.xr.requestSession('immersive-ar', {
+          optionalFeatures: ['hit-test', 'dom-overlay'],
+          domOverlay: { root: ov }
+        });
+      } catch (e2) {
+        console.warn('WebXR level 2 failed, trying level 3:', e2);
+        try {
+          session = await navigator.xr.requestSession('immersive-ar', {
+            requiredFeatures: ['hit-test']
+          });
+        } catch (e3) {
+          try {
+            session = await navigator.xr.requestSession('immersive-ar');
+          } catch (e4) {
+            console.warn('Native WebXR not available:', e4);
+          }
+        }
+      }
+    }
+
+    if (session) {
+      startXRSession(session);
+      return;
+    }
+    ov.style.display = 'none';
+  }
+
+  // 2. Fallback to Live Camera AR Pass-Through (Universal: works over LAN, HTTP, desktop, mobile!)
+  try {
+    await startCameraAR();
+  } catch (camErr) {
+    console.error('Camera AR error:', camErr);
+    if (isAndroid && androidSvBtn && androidSvBtn.href && androidSvBtn.href.startsWith('intent:')) {
+      window.location.href = androidSvBtn.href;
+      return;
+    }
+    note.textContent = 'Could not open camera: ' + (camErr.message || 'Allow camera permission or host on HTTPS.');
+  }
 };
 
 $('exit').onclick = () => { if (xrSession) xrSession.end(); };
