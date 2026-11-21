@@ -617,6 +617,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 const HUD_CONFIG = {
   modelName: 'Ghost Salute',
   modelUrl: 'https://cst-lan.s3.eu-north-1.amazonaws.com/Gost+Salute.fbx',
+  fallbackModelUrl: 'Gost Salute.fbx', // Local backup file in project
   accentColor: '#ff6a1a',
   fallbackSizeMB: 29.5
 };
@@ -809,25 +810,54 @@ function computeExactSkinnedBox(root) {
 
 // Streaming fetch with live % and MB progress
 async function fetchArrayBufferWithProgress(url, onProgress) {
-  const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching FBX`);
-  const total = Number(res.headers.get('content-length')) || 0;
-  if (!res.body) return await res.arrayBuffer();
-
-  const reader = res.body.getReader();
-  const chunks = [];
-  let loaded = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.byteLength;
-    onProgress(loaded, total);
+  let res;
+  try {
+    res = await fetch(url, { mode: 'cors', credentials: 'omit' });
+  } catch (err) {
+    if (HUD_CONFIG.fallbackModelUrl) {
+      console.warn(`Could not reach ${url}. Trying local fallback ${HUD_CONFIG.fallbackModelUrl}…`);
+      res = await fetch(HUD_CONFIG.fallbackModelUrl);
+    } else {
+      throw err;
+    }
   }
-  const out = new Uint8Array(loaded);
-  let offset = 0;
-  for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
-  return out.buffer;
+  if (!res.ok) {
+    if (HUD_CONFIG.fallbackModelUrl && url !== HUD_CONFIG.fallbackModelUrl) {
+      console.warn(`HTTP ${res.status} on ${url}. Trying local fallback ${HUD_CONFIG.fallbackModelUrl}…`);
+      res = await fetch(HUD_CONFIG.fallbackModelUrl);
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching model`);
+  }
+  const total = Number(res.headers.get('content-length')) || 0;
+  let ab;
+  if (!res.body) {
+    ab = await res.arrayBuffer();
+  } else {
+    const reader = res.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.byteLength;
+      onProgress(loaded, total);
+    }
+    const out = new Uint8Array(loaded);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
+    ab = out.buffer;
+  }
+
+  // Check if downloaded asset is an error page or Git LFS text pointer
+  const checkBytes = new Uint8Array(ab, 0, Math.min(ab.byteLength, 48));
+  const checkText = String.fromCharCode(...checkBytes);
+  if ((checkText.trim().startsWith('<') || checkText.startsWith('version https://git-lfs')) &&
+      HUD_CONFIG.fallbackModelUrl && url !== HUD_CONFIG.fallbackModelUrl) {
+    console.warn(`Asset from ${url} is an error page or Git LFS pointer. Falling back to ${HUD_CONFIG.fallbackModelUrl}…`);
+    return await fetchArrayBufferWithProgress(HUD_CONFIG.fallbackModelUrl, onProgress);
+  }
+  return ab;
 }
 
 // ---- Load S3 FBX Model WITH Full Embedded Skeletal Animation ----
@@ -876,6 +906,19 @@ async function loadFBXModel() {
     pctBadge.textContent = '94%';
     mbCounter.textContent = `${detectedTotalMB.toFixed(1)} / ${detectedTotalMB.toFixed(1)} MB`;
     await new Promise(r => setTimeout(r, 40));
+
+    // Inspect buffer to ensure valid FBX data before passing to FBXLoader
+    const headBytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 64));
+    const headStr = String.fromCharCode(...headBytes);
+    if (headStr.startsWith('version https://git-lfs')) {
+      throw new Error('Downloaded asset is a Git LFS text pointer, not the actual binary 3D model.');
+    }
+    if (headStr.trim().startsWith('<')) {
+      throw new Error('Server returned an HTML or XML error page instead of 3D asset.');
+    }
+    if (!headStr.startsWith('Kaydara FBX Binary') && !headStr.includes('FBXVersion:') && !headStr.includes('Kaydara')) {
+      throw new Error('Asset is not a valid FBX file.');
+    }
 
     const fbxLoader = new FBXLoader();
     const basePath = MODEL_URL.substring(0, MODEL_URL.lastIndexOf('/') + 1);
